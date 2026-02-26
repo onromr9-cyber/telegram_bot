@@ -2,7 +2,7 @@ import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 import random
-from collections import deque, Counter
+from collections import deque
 
 # --- BOT TEMEL ---
 TOKEN = os.getenv("BOT_TOKEN")
@@ -22,10 +22,12 @@ hidden_map = {0:(32,26),1:(33,20),2:(25,21),3:(26,35),4:(21,19),
 35:(3,12),36:(11,13)}
 
 # --- GLOBAL ---
-history = deque(maxlen=50)  # Kullanıcı girdilerini saklayacak
 prev_guess = None
+history = deque(maxlen=50)  # geçmiş kullanıcı girdileri
+current_hidden_set = set()
+current_main_guess = []
 
-# --- HELPER: 3 sol + 3 sağ + ana sayı ---
+# --- HELPER ---
 def get_hidden_set(main_number):
     sol1, sag1 = hidden_map[main_number]
     sol2, _ = hidden_map[sol1]
@@ -34,15 +36,25 @@ def get_hidden_set(main_number):
     _, sag3 = hidden_map[sag2]
     return {sol3, sol2, sol1, main_number, sag1, sag2, sag3}
 
+def generate_main_guess():
+    # geçmişe göre ağırlıklı tahmin
+    scores = {num:1 for num in range(37)}
+    for h in history:
+        for delta in [-1,0,1]:
+            n = (h + delta) % 37
+            scores[n] += 3
+    sorted_scores = sorted(scores.items(), key=lambda x:-x[1])
+    return [num for num,_ in sorted_scores[:2]]
+
 # --- START ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
-    await update.message.reply_text("Bot aktif ✅ deneme yapıyorum.")
+    await update.message.reply_text("Bot aktif ✅ 2 adminli sistem hazır. Tahminler başlıyor...")
 
-# --- EVRİMSEL ---
+# --- TAHMİN ---
 async def evrimsel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global prev_guess, history
+    global prev_guess, history, current_hidden_set, current_main_guess
     if not is_admin(update):
         return
 
@@ -51,32 +63,23 @@ async def evrimsel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Sadece sayı giriniz.")
         return
     user_input = int(user_input_text)
-    history.append(user_input)
 
-    # --- Tahmin motoru: geçmiş girdilere yakın sayılara ağırlık ver ---
-    scores = {num:1 for num in range(37)}  # temel skor
-    for h in history:
-        for delta in [-1,0,1]:  # komşu etkisi
-            n = (h + delta) % 37
-            scores[n] += 3  # geçmiş girdiye yakın sayılara ağırlık
+    # --- Kullanıcının önceki tahmini kontrol et ---
+    if current_hidden_set:
+        if user_input in current_hidden_set:
+            await update.message.reply_text("Kazandım")
+        else:
+            await update.message.reply_text("Kaybettim")
+        history.append(user_input)
 
-    # Skorları sırala ve en yüksek 2 sayıyı ana tahmin olarak al
-    sorted_scores = sorted(scores.items(), key=lambda x:-x[1])
-    main_guess = [num for num,_ in sorted_scores[:2]]
-
-    # --- Gizli setleri oluştur ---
-    hidden_set = set()
-    for num in main_guess:
-        hidden_set.update(get_hidden_set(num))
-
-    # --- Kontrol ---
-    if user_input in hidden_set:
-        await update.message.reply_text("Kazandım")
-    else:
-        await update.message.reply_text("Kaybettim")
+    # --- Yeni tahmin üret ---
+    current_main_guess = generate_main_guess()
+    current_hidden_set = set()
+    for num in current_main_guess:
+        current_hidden_set.update(get_hidden_set(num))
 
     # --- Ana sayıları göster ---
-    await update.message.reply_text(f"Ana sayılar: {main_guess}")
+    await update.message.reply_text(f"Ana sayılar: {current_main_guess}")
 
 # --- APP ---
 app = ApplicationBuilder().token(TOKEN).build()
