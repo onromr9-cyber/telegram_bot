@@ -1,23 +1,17 @@
 import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from collections import defaultdict, deque, Counter
 import random
+from collections import deque, Counter
 
 # --- BOT TEMEL ---
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = {5813833511, 1278793650}  # 2 adminli
+ADMIN_IDS = {5813833511, 1278793650}  # 2 admin
 
 def is_admin(update: Update):
     return update.effective_user.id in ADMIN_IDS
 
-# --- EVRİMSEL MOTOR VERİLERİ ---
-NUM_RANGE = 37
-WINDOW = 100
-PERF_WINDOW = 20
-NUM_GUESS = 2  # Ana sayı sayısı
-
-# Gizli komşular haritası
+# --- HIDDEN MAP ---
 hidden_map = {0:(32,26),1:(33,20),2:(25,21),3:(26,35),4:(21,19),
 5:(24,10),6:(27,34),7:(28,29),8:(23,30),9:(22,31),
 10:(5,23),11:(30,36),12:(35,28),13:(36,27),14:(31,20),
@@ -27,15 +21,11 @@ hidden_map = {0:(32,26),1:(33,20),2:(25,21),3:(26,35),4:(21,19),
 30:(8,11),31:(9,14),32:(15,0),33:(1,16),34:(6,17),
 35:(3,12),36:(11,13)}
 
-history = deque(maxlen=WINDOW)
-transition = defaultdict(lambda: defaultdict(int))
-performance = deque(maxlen=PERF_WINDOW)
+# --- GLOBAL ---
+history = deque(maxlen=50)  # Kullanıcı girdilerini saklayacak
+prev_guess = None
 
-total_rounds = 0
-total_wins = 0
-prev_input = None  # İlk input yok, bot kendi tahmini ile başlar
-
-# --- HELPER: Gizli 3 soldan + 3 sağdan + ana sayı = 7 sayı ---
+# --- HELPER: 3 sol + 3 sağ + ana sayı ---
 def get_hidden_set(main_number):
     sol1, sag1 = hidden_map[main_number]
     sol2, _ = hidden_map[sol1]
@@ -44,58 +34,49 @@ def get_hidden_set(main_number):
     _, sag3 = hidden_map[sag2]
     return {sol3, sol2, sol1, main_number, sag1, sag2, sag3}
 
-# --- TELEGRAM HANDLER ---
+# --- START ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
-    await update.message.reply_text("Bot aktif ✅ 2 adminli sistem hazır.")
+    await update.message.reply_text("Bot aktif ✅ deneme yapıyorum.")
 
+# --- EVRİMSEL ---
 async def evrimsel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global prev_guess, history
     if not is_admin(update):
         return
-
-    global prev_input, total_rounds, total_wins
 
     user_input_text = update.message.text
     if not user_input_text.isdigit():
         await update.message.reply_text("Sadece sayı giriniz.")
         return
     user_input = int(user_input_text)
+    history.append(user_input)
 
-    # --- Eğer önce tahmin yapılmamışsa ilk turu başlat ---
-    if prev_input is None:
-        prev_input = random.randint(0, NUM_RANGE-1)
+    # --- Tahmin motoru: geçmiş girdilere yakın sayılara ağırlık ver ---
+    scores = {num:1 for num in range(37)}  # temel skor
+    for h in history:
+        for delta in [-1,0,1]:  # komşu etkisi
+            n = (h + delta) % 37
+            scores[n] += 3  # geçmiş girdiye yakın sayılara ağırlık
 
-    # --- Tahmin motoru (basit rastgele + transition geçmişi) ---
-    # Toplam NUM_RANGE arasından geçici skor hesapla
-    scores = {num: transition.get(prev_input, {}).get(num,0) + random.randint(0,5) for num in range(NUM_RANGE)}
+    # Skorları sırala ve en yüksek 2 sayıyı ana tahmin olarak al
     sorted_scores = sorted(scores.items(), key=lambda x:-x[1])
-    main_guess = [num for num,_ in sorted_scores[:NUM_GUESS]]
+    main_guess = [num for num,_ in sorted_scores[:2]]
 
-    # --- Gizli setleri hazırla ---
+    # --- Gizli setleri oluştur ---
     hidden_set = set()
     for num in main_guess:
-        hidden_set.update(get_hidden_set(num))  # Ana sayı + soldan 3 + sağdan 3
+        hidden_set.update(get_hidden_set(num))
 
-    # --- Kullanıcı kontrol ---
+    # --- Kontrol ---
     if user_input in hidden_set:
-        result_text = "🎯 KAZANDINIZ!"
-        total_wins += 1
-        performance.append(1)
+        await update.message.reply_text("Kazandım")
     else:
-        result_text = "Kaybettiniz."
-        performance.append(0)
-    total_rounds += 1
+        await update.message.reply_text("Kaybettim")
 
-    # --- Sonuç mesajı ---
-    await update.message.reply_text(f"Ana tahminler: {main_guess}\n{result_text}\nWin Rate: %{(total_wins/total_rounds*100):.2f}")
-
-    # --- Transition güncelle ---
-    if prev_input is not None:
-        transition[prev_input][user_input] += 1
-        history.append((prev_input, user_input))
-
-    prev_input = user_input  # Bir sonraki tur için baz
+    # --- Ana sayıları göster ---
+    await update.message.reply_text(f"Ana sayılar: {main_guess}")
 
 # --- APP ---
 app = ApplicationBuilder().token(TOKEN).build()
