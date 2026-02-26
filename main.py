@@ -48,7 +48,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
     await update.message.reply_text(
-        "Bot aktif ✅ Tahmin algoritması agresif ve ilk kod mantığında çalışıyor. İki admin kullanabilir."
+        "Bot aktif ✅ Sadece sana özel çalışıyorum."
     )
 
 # --- ANA MOTOR ---
@@ -153,5 +153,6 @@ app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, evrimsel))
 
-print("Bot çalışıyor... İlk kod mantığı + iki admin + hidden gizli + kazanım mesajı ayrıldı")
+print("Bot çalışıyor...")
 app.run_polling()
+
