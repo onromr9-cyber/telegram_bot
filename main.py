@@ -83,10 +83,10 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if res in state["last_bets"]:
                 state["bakiye"] += 360
                 state["loss_streak"] = 0
-                await update.message.reply_text(f"✅ BİLDİK! (+360 TL)")
+                await update.message.reply_text(f"✅ Aldık! (+360 TL)")
             else:
                 state["loss_streak"] += 1
-                await update.message.reply_text(f"❌ KAÇTI ({res}) | Seri: {state['loss_streak']}")
+                await update.message.reply_text(f"❌ Gitti ({res}) | Seri: {state['loss_streak']}")
         
         state["history"].append(res)
         targets = smart_engine(uid)
@@ -116,3 +116,4 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
     app.run_polling()
+
