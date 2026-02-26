@@ -21,6 +21,7 @@ SHORT_WINDOW = 5
 PERF_WINDOW = 20
 NUM_MAIN = 3
 NUM_SUPPORT = 3
+AGGRESSIVE_PHASE = 25  # İlk 25 tur agresif
 
 hidden_map = {
 0:(32,26),1:(33,20),2:(25,21),3:(26,35),4:(21,19),
@@ -50,7 +51,9 @@ for aid in ADMIN_IDS:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
-    await update.message.reply_text("Bot aktif ✅ Pro Mode ile hazır. İki admin aynı anda kullanabilir.")
+    await update.message.reply_text(
+        "Bot aktif ✅ Pro Mode (kısa vadeli agresif tahmin) hazır. İki admin aynı anda kullanabilir."
+    )
 
 # --- SKOR HESAPLAMA ---
 def calculate_scores(admin_dict):
@@ -65,14 +68,18 @@ def calculate_scores(admin_dict):
     short_counts = Counter([x[1] for x in list(history)[-SHORT_WINDOW:]])
 
     win_rate = (sum(performance)/len(performance)) if performance else 0
+    rounds_played = admin_dict["total_rounds"]
 
-    # Adaptif ağırlık
-    if win_rate < 0.35:
-        t_weight, g_weight, r_weight, n_weight, m_weight = 5, 3, 8, 4, 6
-    elif win_rate < 0.5:
-        t_weight, g_weight, r_weight, n_weight, m_weight = 4, 3, 6, 3, 4
-    else:
-        t_weight, g_weight, r_weight, n_weight, m_weight = 3, 3, 4, 2, 2
+    # --- Ağırlıkları belirle ---
+    if rounds_played < AGGRESSIVE_PHASE:  # Kısa vade agresif
+        t_weight, g_weight, r_weight, n_weight, m_weight = 7, 5, 10, 5, 8
+    else:  # Normal adaptif
+        if win_rate < 0.35:
+            t_weight, g_weight, r_weight, n_weight, m_weight = 5, 3, 8, 4, 6
+        elif win_rate < 0.5:
+            t_weight, g_weight, r_weight, n_weight, m_weight = 4, 3, 6, 3, 4
+        else:
+            t_weight, g_weight, r_weight, n_weight, m_weight = 3, 3, 4, 2, 2
 
     for num in range(NUM_RANGE):
         transition_count = transition[prev_input][num]
@@ -114,13 +121,15 @@ async def evrimsel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_dict = admins_data[user_id]
 
     user_input_text = update.message.text
+
+    # Rakam ve aralık kontrolü
     if not user_input_text.isdigit():
-        await update.message.reply_text("Sadece 0-36 arası sayı giriniz.")
+        await update.message.reply_text("Lütfen 0 ile 36 arasında geçerli bir sayı giriniz.")
         return
 
     user_input = int(user_input_text)
-    if not 0 <= user_input < NUM_RANGE:
-        await update.message.reply_text("0-36 arası sayı giriniz.")
+    if not 0 <= user_input <= 36:
+        await update.message.reply_text("Lütfen 0 ile 36 arasında geçerli bir sayı giriniz.")
         return
 
     # İlk veri
@@ -143,10 +152,6 @@ async def evrimsel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         hidden_bonus.update([sol1, sag1, sol2, sag2])
 
     # Sonuçlar
-    total_rounds = admin_dict["total_rounds"]
-    total_main_hits = admin_dict["total_main_hits"]
-    total_support_hits = admin_dict["total_support_hits"]
-
     main_hit = user_input in main_guess
     support_hit = user_input in support_guess
 
@@ -184,5 +189,5 @@ app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, evrimsel))
 
-print("Bot çalışıyor... Pro Mode")
+print("Bot çalışıyor... Pro Mode (Kısa Vade Agresif)")
 app.run_polling()
