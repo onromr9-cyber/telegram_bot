@@ -4,7 +4,6 @@ from collections import deque
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# --- AYARLAR ---
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = {5813833511, 1278793650}
 
@@ -15,57 +14,61 @@ user_states = {}
 
 def get_user_state(uid):
     if uid not in user_states:
-        user_states[uid] = {
-            "bakiye": 1000, 
-            "history": deque(maxlen=30), 
-            "last_bets": [],
-            "loss_streak": 0
-        }
+        user_states[uid] = {"bakiye": 1000, "history": deque(maxlen=40), "last_bets": [], "loss_streak": 0}
     return user_states[uid]
 
 def get_neighbors(n, s=3):
     idx = WHEEL.index(n)
     return [WHEEL[(idx + i) % 37] for i in range(-s, s + 1)]
 
-def smart_engine(uid):
+def dynamic_engine(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
+    streak = state["loss_streak"]
     
     if len(hist) < 3: return random.sample(WHEEL, 2)
     
     scores = {num: 0 for num in range(37)}
-    
-    # 1. RADİKAL TREND TAKİBİ: Son 2 sayıya devasa ağırlık ver (Yön değişimini yakalar)
-    last_two = hist[-2:]
-    for i, n in enumerate(last_two):
+    for i, n in enumerate(reversed(hist[-10:])):
+        weight = 100 / (1.2**i)
         idx = WHEEL.index(n)
-        for d in [-2, -1, 0, 1, 2]: # Etki alanını geniş tut
-            scores[WHEEL[(idx + d) % 37]] += (150 * (i + 1))
+        for d in [-2, -1, 0, 1, 2]:
+            scores[WHEEL[(idx + d) % 37]] += weight
 
-    # 2. BÖLGESEL HAFIZA: Son 15 sayıya orta ağırlık ver (İstikrar sağlar)
-    for n in hist[-15:]:
-        idx = WHEEL.index(n)
-        for d in [-1, 0, 1]:
-            scores[WHEEL[(idx + d) % 37]] += 20
-
-    # Puanları sırala
-    sorted_candidates = sorted(scores.items(), key=lambda x: -x[1])[:6]
-    top_picks = [x[0] for x in sorted_candidates]
+    sorted_candidates = sorted(scores.items(), key=lambda x: -x[1])
     
-    # --- STRATEJİ DEĞİŞİMİ ---
-    # Eğer bot kaybediyorsa, en yüksek puanlı 3 farklı bölgeyi seç (Dağınık oyun)
-    if state["loss_streak"] >= 3:
-        # Puan sıralamasında birbirine uzak olanları seçmeye çalışır
-        return [top_picks[0], top_picks[2], top_picks[4]]
-    
-    # Kazandığında veya stabil gittiğinde en güçlü 2 bölgeye odaklan
-    return [top_picks[0], top_picks[1]]
+    # --- SENİN ÖNERİN: KAYIP ARTTIKÇA SAYI SAYISINI ARTIR ---
+    if streak < 4:
+        target_count = 2
+    elif streak < 7:
+        target_count = 3
+    elif streak < 10:
+        target_count = 4
+    else:
+        target_count = 5
+        
+    # En yüksek puanlı sayıları seç ama birbirine çok yakın olmamalarına dikkat et
+    targets = [sorted_candidates[0][0]]
+    for cand in sorted_candidates[1:]:
+        if len(targets) >= target_count: break
+        # Seçilen diğer hedeflere çok yakın değilse listeye ekle (Masanın farklı yerlerine dağıt)
+        if all(abs(WHEEL.index(cand[0]) - WHEEL.index(t)) > 3 for t in targets):
+            targets.append(cand[0])
+            
+    # Eğer filtreleme yüzünden sayı eksik kalırsa en yüksek puanlıları doldur
+    if len(targets) < target_count:
+        for cand in sorted_candidates:
+            if cand[0] not in targets:
+                targets.append(cand[0])
+                if len(targets) == target_count: break
+                
+    return targets
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
-    user_states[uid] = {"bakiye": 1000, "history": deque(maxlen=30), "last_bets": [], "loss_streak": 0}
-    await update.message.reply_text("🎯 Kararlı Hibrit Motor Aktif!\nTrend değişimlerini daha hızlı yakalar.")
+    user_states[uid] = {"bakiye": 1000, "history": deque(maxlen=40), "last_bets": [], "loss_streak": 0}
+    await update.message.reply_text("💡 Senin Stratejin Devrede!\nKaybettikçe hedef sayısı artar, komşular daralır.")
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -76,25 +79,22 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res = int(update.message.text)
         if not (0 <= res <= 36): raise ValueError
         
-        # Sonuç Değerlendirme
         if state["last_bets"]:
             cost = len(state["last_bets"]) * 10
             state["bakiye"] -= cost
             if res in state["last_bets"]:
                 state["bakiye"] += 360
                 state["loss_streak"] = 0
-                await update.message.reply_text(f"✅ Aldık! (+360 TL)")
+                await update.message.reply_text(f"✅ BİLDİK! Strateji sıfırlandı.")
             else:
                 state["loss_streak"] += 1
-                await update.message.reply_text(f"❌ Gitti ({res}) | Seri: {state['loss_streak']}")
+                await update.message.reply_text(f"❌ PAS ({res}) | Seri: {state['loss_streak']}")
         
         state["history"].append(res)
-        targets = smart_engine(uid)
+        targets = dynamic_engine(uid)
         
-        # Komşu sayısını seri durumuna göre esnet
-        # Çok kaybederse kapsama alanını genişletir
-        k_sayisi = 3
-        if state["loss_streak"] >= 5: k_sayisi = 4 
+        # --- SENİN ÖNERİN: KOMŞULARI DARALT ---
+        k_sayisi = 3 if state["loss_streak"] < 4 else 2
         
         current_bets = set()
         for t in targets:
@@ -104,7 +104,8 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prob = (len(state["last_bets"]) / 37) * 100
         await update.message.reply_text(
             f"💰 Bakiye: {state['bakiye']} TL\n"
-            f"🎯 Tahminler: {targets}\n"
+            f"🎯 Hedef Sayı Sayısı: {len(targets)}\n"
+            f"📍 Odaklar: {targets}\n"
             f"🎲 Kapsama: %{prob:.1f}"
         )
         
@@ -116,4 +117,3 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
     app.run_polling()
-
