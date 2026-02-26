@@ -47,7 +47,9 @@ for aid in ADMIN_IDS:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
-    await update.message.reply_text("Bot aktif ✅ Sadece sana özel çalışıyorum.")
+    await update.message.reply_text(
+        "Bot aktif ✅ Tahmin algoritması agresif ve ilk kod mantığında çalışıyor. İki admin kullanabilir."
+    )
 
 # --- ANA MOTOR ---
 async def evrimsel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -105,14 +107,32 @@ async def evrimsel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- Sonuç ---
     admin["total_rounds"] += 1
-    win = user_input in main_guess or user_input in extra_guess or user_input in hidden_bonus
-    if win:
+
+    win_messages = []
+    win_main = user_input in main_guess
+    win_extra = user_input in extra_guess
+    win_hidden = user_input in hidden_bonus
+
+    if win_main:
         admin["total_wins"] += 1
         admin["performance"].append(1)
-        await update.message.reply_text("🎯 Kazandınız!")
-    else:
+        win_messages.append("🎯 Kazandınız! (Ana)")
+
+    if win_extra:
+        admin["total_wins"] += 1
+        admin["performance"].append(1)
+        win_messages.append("🎯 Kazandınız! (Ekstra)")
+
+    if win_hidden:
+        admin["total_wins"] += 1
+        admin["performance"].append(1)
+        # Hidden için mesaj göstermiyoruz
+
+    if not (win_main or win_extra or win_hidden):
         admin["performance"].append(0)
-        await update.message.reply_text("Kaybettik.")
+        win_messages.append("Kaybettik.")
+
+    await update.message.reply_text("\n".join(win_messages))
 
     # --- Sade mesaj ---
     await update.message.reply_text(
@@ -133,6 +153,5 @@ app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, evrimsel))
 
-print("Bot çalışıyor...")
+print("Bot çalışıyor... İlk kod mantığı + iki admin + hidden gizli + kazanım mesajı ayrıldı")
 app.run_polling()
-
