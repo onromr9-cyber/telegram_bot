@@ -48,7 +48,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
     await update.message.reply_text(
-        "Bot aktif ✅ Sadece sana özel çalışıyorum."
+        "Bot aktif ✅ Sadece sana özel agresif çalışıyorum."
     )
 
 # --- ANA MOTOR ---
@@ -98,38 +98,21 @@ async def evrimsel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     main_guess = [num for num,_ in sorted_nums[:NUM_GUESS]]
     extra_guess = [num for num,_ in sorted_nums[NUM_GUESS:NUM_GUESS+NUM_EXTRA]]
 
-    # Hidden bonus hesaplaması ama mesajda gösterilmiyor
-    hidden_bonus = set()
-    for num in main_guess + extra_guess:
-        sol1, sag1 = hidden_map[num]
-        sol2, sag2 = hidden_map[sol1][0], hidden_map[sag1][1]
-        hidden_bonus.update([sol1,sag1,sol2,sag2])
-
     # --- Sonuç ---
     admin["total_rounds"] += 1
-
     win_messages = []
-    win_main = user_input in main_guess
-    win_extra = user_input in extra_guess
-    win_hidden = user_input in hidden_bonus
 
-    if win_main:
+    if user_input in main_guess:
         admin["total_wins"] += 1
         admin["performance"].append(1)
         win_messages.append("🎯 Kazandınız! (Ana)")
 
-    if win_extra:
+    if user_input in extra_guess:
         admin["total_wins"] += 1
         admin["performance"].append(1)
         win_messages.append("🎯 Kazandınız! (Ekstra)")
 
-    if win_hidden and not (win_main or win_extra):
-        admin["total_wins"] += 1
-        admin["performance"].append(1)
-        # Hidden için mesaj göstermiyoruz, ama mesaj boş kalmasın
-        win_messages.append("🎯 Kazandınız!")  
-
-    if not (win_main or win_extra or win_hidden):
+    if not win_messages:
         admin["performance"].append(0)
         win_messages = ["Kaybettik."]
 
