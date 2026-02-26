@@ -1,90 +1,105 @@
 import os
+import random
+from collections import Counter, deque
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-import random
-from collections import deque
 
-# --- BOT TEMEL ---
+# --- AYARLAR VE ADMINLER ---
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = {5813833511, 1278793650}  # 2 admin
+ADMIN_IDS = {5813833511, 1278793650}
 
-def is_admin(update: Update):
-    return update.effective_user.id in ADMIN_IDS
+# Avrupa Ruleti Çark Dizilimi (Senin hidden_map yerine dinamik index kullanıyoruz)
+WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 
+         5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 
-# --- HIDDEN MAP ---
-hidden_map = {0:(32,26),1:(33,20),2:(25,21),3:(26,35),4:(21,19),
-5:(24,10),6:(27,34),7:(28,29),8:(23,30),9:(22,31),
-10:(5,23),11:(30,36),12:(35,28),13:(36,27),14:(31,20),
-15:(19,32),16:(33,24),17:(34,25),18:(29,22),19:(4,15),
-20:(14,1),21:(2,4),22:(18,9),23:(10,8),24:(16,5),
-25:(17,2),26:(0,3),27:(13,6),28:(12,7),29:(7,18),
-30:(8,11),31:(9,14),32:(15,0),33:(1,16),34:(6,17),
-35:(3,12),36:(11,13)}
+# Çok kullanıcılı veri deposu
+user_states = {}
 
-# --- GLOBAL ---
-prev_guess = None
-history = deque(maxlen=50)  # geçmiş kullanıcı girdileri
-current_hidden_set = set()
-current_main_guess = []
+def get_user_state(uid):
+    if uid not in user_states:
+        user_states[uid] = {
+            "bakiye": 1000,
+            "history": deque(maxlen=50),
+            "last_bets": set(),
+            "targets": []
+        }
+    return user_states[uid]
 
-# --- HELPER ---
-def get_hidden_set(main_number):
-    sol1, sag1 = hidden_map[main_number]
-    sol2, _ = hidden_map[sol1]
-    _, sag2 = hidden_map[sag1]
-    sol3, _ = hidden_map[sol2]
-    _, sag3 = hidden_map[sag2]
-    return {sol3, sol2, sol1, main_number, sag1, sag2, sag3}
+def is_admin(uid):
+    return uid in ADMIN_IDS
 
-def generate_main_guess():
-    # geçmişe göre ağırlıklı tahmin
-    scores = {num:1 for num in range(37)}
-    for h in history:
-        for delta in [-1,0,1]:
-            n = (h + delta) % 37
-            scores[n] += 3
-    sorted_scores = sorted(scores.items(), key=lambda x:-x[1])
-    return [num for num,_ in sorted_scores[:2]]
+def get_neighbors(n, s=3):
+    """Senin hidden_map'inin dinamik ve hatasız versiyonu"""
+    idx = WHEEL.index(n)
+    return [WHEEL[(idx + i) % 37] for i in range(-s, s + 1)]
 
-# --- START ---
+def generate_main_guess(uid):
+    state = get_user_state(uid)
+    if not state["history"]: return random.sample(WHEEL, 2)
+    
+    # Senin puanlama (scoring) mantığını daha agresif hale getirdik
+    scores = {num: 1 for num in range(37)}
+    for h in state["history"]:
+        for delta in [-1, 0, 1]: # Sayının kendisi ve yanındakilere odaklan
+            n = (WHEEL[(WHEEL.index(h) + delta) % 37])
+            scores[n] += 5 # Ağırlığı artırdık
+            
+    sorted_scores = sorted(scores.items(), key=lambda x: -x[1])
+    return [num for num, _ in sorted_scores[:2]]
+
+# --- TELEGRAM HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    await update.message.reply_text("Bot aktif ✅ 2 adminli sistem hazır. Tahminler başlıyor...")
+    uid = update.effective_user.id
+    if not is_admin(uid): return
+    
+    user_states[uid] = {"bakiye": 1000, "history": deque(maxlen=50), "last_bets": set(), "targets": []}
+    await update.message.reply_text("✅ Sistem Hazır.\nBakiyen: 1000 TL\nSayı girerek başla.")
 
-# --- TAHMİN ---
-async def evrimsel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global prev_guess, history, current_hidden_set, current_main_guess
-    if not is_admin(update):
+async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid): return
+    
+    state = get_user_state(uid)
+    text = update.message.text
+
+    if not text.isdigit():
+        await update.message.reply_text("Sadece sayı gir!")
         return
 
-    user_input_text = update.message.text
-    if not user_input_text.isdigit():
-        await update.message.reply_text("Sadece sayı giriniz.")
-        return
-    user_input = int(user_input_text)
+    res = int(text)
+    if not (0 <= res <= 36): return
 
-    # --- Kullanıcının önceki tahmini kontrol et ---
-    if current_hidden_set:
-        if user_input in current_hidden_set:
-            await update.message.reply_text("Kazandım")
+    # 1. Önceki Tahmin Sonucu (Senin 'Kazandım/Kaybettim' mantığın)
+    if state["last_bets"]:
+        cost = len(state["last_bets"]) * 10
+        state["bakiye"] -= cost
+        if res in state["last_bets"]:
+            state["bakiye"] += 360
+            await update.message.reply_text(f"✅ KAZANDIM! (+360 TL)")
         else:
-            await update.message.reply_text("Kaybettim")
-        history.append(user_input)
+            await update.message.reply_text(f"❌ KAYBETTİM! (-{cost} TL)")
 
-    # --- Yeni tahmin üret ---
-    current_main_guess = generate_main_guess()
-    current_hidden_set = set()
-    for num in current_main_guess:
-        current_hidden_set.update(get_hidden_set(num))
+    # 2. Yeni Tahmin Üret
+    state["history"].append(res)
+    state["targets"] = generate_main_guess(uid)
+    
+    # Kapsama Alanı (Senin 3 komşu mantığın)
+    k_sayisi = 3 if state["bakiye"] > 300 else 2 # Risk adaptif mod
+    state["last_bets"] = set()
+    for t in state["targets"]:
+        state["last_bets"].update(get_neighbors(t, k_sayisi))
 
-    # --- Ana sayıları göster ---
-    await update.message.reply_text(f"Ana sayılar: {current_main_guess}")
+    # 3. Bilgilendirme
+    oran = (len(state["last_bets"]) / 37) * 100
+    msg = (f"💰 Bakiye: {state['bakiye']}\n"
+           f"🎯 Hedefler: {state['targets']}\n"
+           f"🎲 Olasılık: %{oran:.1f}")
+    await update.message.reply_text(msg)
 
 # --- APP ---
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, evrimsel))
-
-print("Bot çalışıyor...")
-app.run_polling()
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game))
+    print("Bot Railway üzerinde aktif!")
+    app.run_polling()
