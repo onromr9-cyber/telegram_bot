@@ -11,9 +11,11 @@ ADMIN_IDS = {5813833511, 1278793650}
 def is_admin(update: Update):
     return update.effective_user.id in ADMIN_IDS
 
-# --- EVRİMSEL MOTOR AYARLARI ---
+# --- EVRİMSEL MOTOR ---
 NUM_RANGE = 37
 WINDOW = 100
+
+# Basit transition map
 hidden_map = {
 0:(32,26),1:(33,20),2:(25,21),3:(26,35),4:(21,19),
 5:(24,10),6:(27,34),7:(28,29),8:(23,30),9:(22,31),
@@ -25,11 +27,11 @@ hidden_map = {
 35:(3,12),36:(11,13)
 }
 
-# --- Admin Bazlı Veriler ---
+# --- Admin verileri ---
 admins_data = {}
 for aid in ADMIN_IDS:
     admins_data[aid] = {
-        "prev_input": 0,  # Başlangıç input
+        "prev_input": 0,
         "history": deque(maxlen=WINDOW),
         "transition": defaultdict(lambda: defaultdict(int)),
         "performance": deque(maxlen=20),
@@ -41,7 +43,7 @@ for aid in ADMIN_IDS:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
-    await update.message.reply_text("Bot aktif ✅ İlk sistem mantığı ile çalışıyor. İki admin kullanabilir.")
+    await update.message.reply_text("Bot aktif ✅ Ana / Ekstra / Win Rate gösterimi ile çalışıyor.")
 
 # --- ANA MOTOR ---
 async def evrimsel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -53,41 +55,26 @@ async def evrimsel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
     # Rakam ve aralık kontrolü
-    if not user_text.isdigit():
+    if not user_text.isdigit() or not 0 <= int(user_text) <= 36:
         await update.message.reply_text("Lütfen 0 ile 36 arasında geçerli bir sayı giriniz.")
         return
 
     user_input = int(user_text)
-    if not 0 <= user_input <= 36:
-        await update.message.reply_text("Lütfen 0 ile 36 arasında geçerli bir sayı giriniz.")
-        return
 
-    # Skor hesaplama (basit, ilk bot mantığı)
+    # Skor hesaplama (basit)
     global_counts = Counter([x[1] for x in admin["history"]])
     transition = admin["transition"]
     prev = admin["prev_input"]
 
-    scores = {}
-    for num in range(NUM_RANGE):
-        scores[num] = transition[prev][num] + global_counts[num]
+    scores = {num: transition[prev][num] + global_counts[num] for num in range(NUM_RANGE)}
 
-    # Sıralı tahmin
+    # Tahminler
     sorted_nums = sorted(scores.items(), key=lambda x:-x[1])
     main_guess = [num for num,_ in sorted_nums[:3]]
     extra_guess = [num for num,_ in sorted_nums[3:6]]
 
-    # Hidden bonus
-    hidden_bonus = set()
-    for num in main_guess + extra_guess:
-        sol1, sag1 = hidden_map[num]
-        sol2, sag2 = hidden_map[sol1][0], hidden_map[sag1][1]
-        hidden_bonus.update([sol1, sag1, sol2, sag2])
-
-    # Sonuç ve istatistik
-    total_rounds = admin["total_rounds"]
-    total_hits = admin["total_hits"]
-    hit = user_input in main_guess or user_input in extra_guess or user_input in hidden_bonus
-
+    # Hit kontrol
+    hit = user_input in main_guess or user_input in extra_guess
     if hit:
         admin["total_hits"] += 1
         admin["performance"].append(1)
@@ -98,9 +85,9 @@ async def evrimsel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     admin["total_rounds"] += 1
 
+    # Sonuç mesajı (sadece Main / Extra / Win Rate)
     await update.message.reply_text(
-        f"Ana: {main_guess}\nEkstra: {extra_guess}\nHidden: {sorted(list(hidden_bonus))}\n"
-        f"Win Rate: %{(admin['total_hits']/admin['total_rounds']*100):.2f}"
+        f"Ana: {main_guess}\nEkstra: {extra_guess}\nWin Rate: %{(admin['total_hits']/admin['total_rounds']*100):.2f}"
     )
 
     # History ve transition güncelle
@@ -108,7 +95,7 @@ async def evrimsel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         old_prev, old_correct = admin["history"][0]
         admin["transition"][old_prev][old_correct] -= 1
 
-    admin["history"].append((prev,user_input))
+    admin["history"].append((prev, user_input))
     admin["transition"][prev][user_input] += 1
     admin["prev_input"] = user_input
 
@@ -117,5 +104,5 @@ app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, evrimsel))
 
-print("Bot çalışıyor... İlk sistem mantığı")
+print("Bot çalışıyor... Sade sürüm (Ana / Ekstra / Win Rate)")
 app.run_polling()
