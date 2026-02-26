@@ -35,17 +35,31 @@ def get_neighbors(n, s=3):
 
 def generate_main_guess(uid):
     state = get_user_state(uid)
-    if not state["history"]: return random.sample(WHEEL, 2)
+    hist = list(state["history"])
     
-    # Senin puanlama (scoring) mantığını daha agresif hale getirdik
-    scores = {num: 1 for num in range(37)}
-    for h in state["history"]:
-        for delta in [-1, 0, 1]: # Sayının kendisi ve yanındakilere odaklan
-            n = (WHEEL[(WHEEL.index(h) + delta) % 37])
-            scores[n] += 5 # Ağırlığı artırdık
-            
+    # Eğer veri azsa rastgele başla
+    if len(hist) < 3: 
+        return random.sample(WHEEL, 2)
+    
+    # --- DEĞİŞİKLİK BURADA: Sadece son 10 sayıya bak ---
+    recent_hist = hist[-10:] 
+    scores = {num: 0 for num in range(37)}
+    
+    for i, h in enumerate(recent_hist):
+        # Yeni gelen sayılara daha fazla puan ver (Zaman ağırlıklı)
+        weight = i + 1 
+        for delta in [-1, 0, 1]:
+            # Çark üzerindeki komşuyu bul
+            idx = WHEEL.index(h)
+            n = WHEEL[(idx + delta) % 37]
+            scores[n] += (5 * weight)
+
+    # En yüksek puanlı ilk 5 adayı belirle
     sorted_scores = sorted(scores.items(), key=lambda x: -x[1])
-    return [num for num, _ in sorted_scores[:2]]
+    top_5 = [num for num, score in sorted_scores[:5]]
+    
+    # --- DEĞİŞİKLİK BURADA: En iyi 5 arasından her seferinde farklı 2'li seç ---
+    return random.sample(top_5, 2)
 
 # --- TELEGRAM HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -103,3 +117,4 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game))
     print("Bot Railway üzerinde aktif!")
     app.run_polling()
+
