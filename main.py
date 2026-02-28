@@ -11,12 +11,6 @@ WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10,
          5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
 
-SECTORS = {
-    "Voisins": [22, 18, 29, 7, 28, 12, 35, 3, 26, 0, 32, 15, 19, 4, 21, 2, 25],
-    "Orphelins": [1, 20, 14, 31, 9, 17, 34, 6],
-    "Tiers": [27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33]
-}
-
 USER_STRATEGY_MAP = {
     0: [6,4,16], 1: [27,23,21], 2: [14,17,8], 3: [5,6,18], 4: [26,7,11], 5: [25,15,35], 
     6: [22,24,12], 7: [21,14,28], 8: [12,32,20], 9: [4,36,22], 10: [26,19,31], 
@@ -38,11 +32,11 @@ def get_user_state(uid):
         }
     return user_states[uid]
 
-def get_neighbors(n, s=2):
+def get_neighbors(n, s=1):
     idx = WHEEL_MAP[n]
     return [WHEEL[(idx + i) % 37] for i in range(-s, s + 1)]
 
-def smart_engine_v6(uid):
+def smart_engine_sniper(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
     last_num = hist[-1]
@@ -52,49 +46,46 @@ def smart_engine_v6(uid):
     if len(hist) >= 3:
         dist1 = (WHEEL_MAP[hist[-1]] - WHEEL_MAP[hist[-2]] + 37) % 37
         dist2 = (WHEEL_MAP[hist[-2]] - WHEEL_MAP[hist[-3]] + 37) % 37
-        jump_avg = int(((dist1 + dist2) / 2) * 1.1)
+        jump_avg = int(((dist1 + dist2) / 2) * 1.05)
 
     for i, n in enumerate(reversed(hist[-15:])):
-        decay = 100 / (1.1**i)
+        decay = 100 / (1.15**i) # Daha keskin hafıza
         p_idx = (WHEEL_MAP[n] + jump_avg) % 37
-        for d in [-2, 0, 2]:
+        for d in [-1, 0, 1]:
             num = WHEEL[(p_idx + d) % 37]
             scores[num] += decay
-            if num in USER_STRATEGY_MAP.get(last_num, []): scores[num] *= 2.0
+            if num in USER_STRATEGY_MAP.get(last_num, []): scores[num] *= 2.2
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
+    # 🎯 MAIN: En güçlü 3 odak (2 komşulu kalacak)
     main_targets = []
     for cand_num, _ in sorted_sc:
         if len(main_targets) >= 3: break
-        if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_targets):
+        if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 9 for t in main_targets):
             main_targets.append(cand_num)
 
-    extra_targets = [last_num] # Extra ilk sayı her zaman tekrardır.
+    # ⚡ EXTRA: 2 Sayı (İlki tekrar, 1 komşulu)
+    extra_targets = [last_num] 
     for cand_num, _ in sorted_sc:
-        if len(extra_targets) >= 3: break 
-        if cand_num not in main_targets and cand_num not in extra_targets:
+        if len(extra_targets) >= 2: break
+        if cand_num not in main_targets and cand_num != last_num:
             extra_targets.append(cand_num)
 
-    sector_counts = {"Voisins": 0, "Orphelins": 0, "Tiers": 0}
-    for n in hist[-10:]:
-        for s, nums in SECTORS.items():
-            if n in nums: sector_counts[s] += 1
-    hot_sector = max(sector_counts, key=sector_counts.get)
-    
+    # 🔥 OLASILIK: 1 Nokta atışı (1 komşulu)
     prob_targets = []
     for cand_num, _ in sorted_sc:
-        if len(prob_targets) >= 2: break
-        if cand_num in SECTORS[hot_sector] and cand_num not in main_targets and cand_num not in extra_targets:
+        if len(prob_targets) >= 1: break
+        if cand_num not in main_targets and cand_num not in extra_targets:
             prob_targets.append(cand_num)
             
-    return main_targets, extra_targets, prob_targets, hot_sector
+    return main_targets, extra_targets, prob_targets
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("⚖️ AI V6 - %30 KASA YÖNETİMİ\nIsınma: İlk 10 sayıyı girin.", 
+    await update.message.reply_text("🎯 AI V7 SNIPER MODU AKTİF\nKasa koruma: %15 | Odak: Yüksek Kâr\n10 Isınma sayısı girin.", 
                                    reply_markup=ReplyKeyboardMarkup([['/reset']], resize_keyboard=True))
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -113,15 +104,15 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state["waiting_for_balance"]:
         state["bakiye"] = val
         state["waiting_for_balance"] = False
-        await update.message.reply_text(f"💰 Kasa: {val} TL. %30 risk kuralı aktif."); return
+        await update.message.reply_text(f"💰 Kasa: {val} TL. Sniper moduna geçildi."); return
 
     if state["is_learning"]:
         state["history"].append(val)
         if len(state["history"]) < 10:
-            await update.message.reply_text(f"📥 Veri: {len(state['history'])}/10"); return
+            await update.message.reply_text(f"📥 Isınma: {len(state['history'])}/10"); return
         else:
             state["is_learning"] = False; state["waiting_for_balance"] = True
-            await update.message.reply_text("✅ Isınma Bitti. Bakiyenizi girin:"); return
+            await update.message.reply_text("✅ Analiz tamam. Bakiyenizi girin:"); return
 
     # Bahis Sonuçlandırma
     all_bets = list(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
@@ -131,32 +122,32 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if val in all_bets:
             win = state["last_unit"] * 36
             state["bakiye"] += win
-            await update.message.reply_text(f"✅ KAZANDI!\n💵 Bahis: {bet_cost} TL\n💰 Net: +{win - bet_cost} TL")
+            await update.message.reply_text(f"✅ HİT! (+{win - bet_cost} TL Net)")
         else:
-            await update.message.reply_text(f"❌ KAYIP ({val})\n💵 Bahis: {bet_cost} TL")
+            await update.message.reply_text(f"❌ PAS ({val}) | -{bet_cost} TL")
 
     state["history"].append(val)
-    main_t, extra_t, prob_t, hot_zone = smart_engine_v6(uid)
+    main_t, extra_t, prob_t = smart_engine_sniper(uid)
 
-    m_b = set(); [m_b.update(get_neighbors(t, 2)) for t in main_t]
-    e_b = set(); [e_b.update(get_neighbors(t, 2)) for t in extra_t]
-    p_b = set(); [p_b.update(get_neighbors(t, 2)) for t in prob_t]
+    # KESKİN KOMŞULUK SİSTEMİ
+    m_b = set(); [m_b.update(get_neighbors(t, 2)) for t in main_t] # Main: 2 Komşu
+    e_b = set(); [e_b.update(get_neighbors(t, 1)) for t in extra_t] # Extra: 1 Komşu
+    p_b = set(); [p_b.update(get_neighbors(t, 1)) for t in prob_t]  # Prob: 1 Komşu
 
     state["last_main_bets"], state["last_extra_bets"], state["last_prob_bets"] = list(m_b), list(e_b), list(p_b)
     
-    # %30 Kasa Hesabı
+    # %15 Kasa Yönetimi
     total_nums = len(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
-    risk_limit = state["bakiye"] * 0.30
+    risk_limit = state["bakiye"] * 0.15 # Risk %15'e çekildi
     unit = math.floor(risk_limit / total_nums) if total_nums > 0 else 0
-    state["last_unit"] = max(unit, 1) # Minimum 1 TL bahis
+    state["last_unit"] = max(unit, 1)
 
     await update.message.reply_text(
-        f"💰 KASA: {state['bakiye']} TL\n"
-        f"📢 BU EL: Sayı başı {state['last_unit']} TL basın.\n"
-        f"💸 Toplam Bahis: {total_nums * state['last_unit']} TL (%30)\n\n"
-        f"🎯 MAIN: {main_t}\n"
-        f"⚡ EXTRA: {extra_t}\n"
-        f"🔥 OLASILIK ({hot_zone}): {prob_t}\n\n"
+        f"💰 KASA: {state['bakiye']} TL | 📢 Birim: {state['last_unit']} TL\n"
+        f"💸 Toplam Bahis: {total_nums * state['last_unit']} TL (%15)\n\n"
+        f"🎯 MAIN (2k): {main_t}\n"
+        f"⚡ EXTRA (1k): {extra_t}\n"
+        f"🔥 OLASILIK (1k): {prob_t}\n\n"
         f"🎲 Toplam: {total_nums} sayı"
     )
 
