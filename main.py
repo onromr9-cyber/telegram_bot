@@ -16,8 +16,10 @@ user_states = {}
 def get_user_state(uid):
     if uid not in user_states:
         user_states[uid] = {
-            "bakiye": 0, "history": deque(maxlen=40), 
-            "last_bets": [], "loss_streak": 0, "waiting_for_balance": True
+            "bakiye": 0, "history": deque(maxlen=50), 
+            "last_bets": [], "loss_streak": 0, 
+            "waiting_for_balance": True,
+            "drift_correction": 0 # Sapma düzeltme (Öğrenilen hata payı)
         }
     return user_states[uid]
 
@@ -29,53 +31,65 @@ def smart_engine(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
     
-    # Öğrenme modunun aktifleşmesi için en az 10 tur veri lazım
-    if len(hist) < 10:
-        return [hist[-1] if hist else 0, 10, 20]
+    if len(hist) < 5:
+        return [0, 10, 20], "🌱 Hazırlık: Yeterli veri toplanıyor..."
 
-    # --- ÖĞRENME ANALİZİ (SON 10 TUR) ---
-    last_10 = hist[-10:]
-    indices = [WHEEL_MAP[n] for n in last_10]
+    # --- SÜREKLİ ÖĞRENME ANALİZİ ---
+    last_num = hist[-1]
+    last_idx = WHEEL_MAP[last_num]
     
-    # 1. Dağılım Kontrolü: Toplar birbirine yakın mı düşüyor? (Kümelenme Analizi)
-    cluster_score = sum(1 for i in range(len(indices)-1) if abs(indices[i] - indices[i+1]) <= 5)
-    
-    # 2. Bölge Yoğunluğu (Voisins, Tiers, Orphelins tespiti)
-    regions = {"V": [22,18,29,7,28,12,35,3,26,0,32,15,19,4,21,2,25], "T": [27,13,36,11,30,8,23,10,5,24,16,33], "O": [1,20,14,31,9,17,34,6]}
-    reg_hits = {k: sum(1 for n in last_10 if n in v) for k, v in regions.items()}
-    hot_region = max(reg_hits, key=reg_hits.get)
-    cold_region = min(reg_hits, key=reg_hits.get)
-
-    targets = []
-
-    # --- KARAR MEKANİZMASI ---
-    if cluster_score >= 4:
-        # ÖĞRENME SONUCU: Masa "Sıcak Bölge" eğiliminde.
-        # En çok puan alan sayıları ve son sayının etrafını al.
-        scores = {num: 0 for num in range(37)}
-        for i, n in enumerate(reversed(last_10)):
-            w = 100 / (1.1**i)
-            idx = WHEEL_MAP[n]
-            for d in [-2, -1, 0, 1, 2]: scores[WHEEL[(idx+d)%37]] += w
+    # 1. Hata Payı Öğrenimi (Error Margin Learning)
+    # Eğer son tahminde yakına düştüysek sapmayı hesapla
+    if state["last_bets"] and last_num not in state["last_bets"]:
+        # En yakın tahminimize ne kadar uzaktı?
+        min_dist = 37
+        for bet in state["last_bets"]:
+            dist = (last_idx - WHEEL_MAP[bet] + 37) % 37
+            if dist > 18: dist -= 37
+            if abs(dist) < abs(min_dist): min_dist = dist
         
-        sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
-        targets = [sorted_sc[0][0], hist[-1], sorted_sc[1][0]]
-        decision_msg = "🧠 ÖĞRENME: Kümelenme tespit edildi, sıcak bölge takibi aktif."
+        # Eğer hata payı 5 sayıdan azsa, kurpiyerin "atış sapmasını" öğren
+        if abs(min_dist) <= 6:
+            state["drift_correction"] = min_dist
     else:
-        # ÖĞRENME SONUCU: Masa dağınık. Kaçan bölgelere "Pusu" kur.
-        # En az gelen bölgeden (cold_region) ve çarkın zıt uçlarından seç.
-        targets.append(random.choice(regions[cold_region]))
-        targets.append(WHEEL[(WHEEL_MAP[hist[-1]] + 18) % 37]) # Çarkın tam karşısı
-        targets.append(random.choice(regions["O"] if hot_region != "O" else regions["T"]))
-        decision_msg = "🧠 ÖĞRENME: Dağınık seyir tespit edildi, pusu stratejisi aktif."
+        state["drift_correction"] = 0 # Tam isabet varsa sıfırla
 
-    return targets[:3], decision_msg
+    # 2. Yoğunluk ve Frekans Analizi
+    scores = {num: 0 for num in range(37)}
+    for i, n in enumerate(reversed(hist[-20:])): # Son 20 sayıya bak
+        weight = 100 / (1.08**i)
+        idx = WHEEL_MAP[n]
+        # Puan dağıtırken öğrenilen sapmayı (drift) ekle
+        corrected_idx = (idx + state["drift_correction"]) % 37
+        for d in [-2, -1, 0, 1, 2]:
+            scores[WHEEL[(int(corrected_idx) + d) % 37]] += weight
+
+    sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
+    
+    # 3. Dinamik Karar
+    targets = []
+    targets.append(sorted_sc[0][0]) # En güçlü sıcak sayı
+    
+    # Çarkın karşı tarafını kontrol et (Dengeleme)
+    opposite_idx = (last_idx + 18) % 37
+    targets.append(WHEEL[opposite_idx])
+    
+    # Üçüncü hedef: En çok puan alan 2. sayı
+    targets.append(sorted_sc[1][0])
+
+    learning_msg = f"🧠 ÖĞRENME: Sapma Düzeltme: {state['drift_correction']} | "
+    if abs(state['drift_correction']) > 0:
+        learning_msg += "Hedefler kaydırıldı."
+    else:
+        learning_msg += "Merkez odaklar seçildi."
+
+    return targets[:3], learning_msg
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
-    user_states[uid] = {"bakiye": 0, "history": deque(maxlen=40), "last_bets": [], "loss_streak": 0, "waiting_for_balance": True}
-    await update.message.reply_text("🎰 Bot Hazır. Öğrenme modu son 10 turu izler.\nLütfen başlangıç bakiyenizi girin:")
+    user_states[uid] = {"bakiye": 0, "history": deque(maxlen=50), "last_bets": [], "loss_streak": 0, "waiting_for_balance": True, "drift_correction": 0}
+    await update.message.reply_text("🤖 Sürekli Öğrenme Aktif.\nHer sayıda hata payımı hesaplayıp hedeflerimi güncelleyeceğim.\nBakiyenizi girin:")
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -86,11 +100,12 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text
         if state.get("waiting_for_balance"):
             state["bakiye"] = int(text); state["waiting_for_balance"] = False
-            await update.message.reply_text(f"✅ Bakiye {state['bakiye']} TL. İlk sayıyı girin."); return
+            await update.message.reply_text(f"✅ Bakiye: {state['bakiye']} TL. İlk sayıyı girin."); return
 
         res = int(text)
         if not (0 <= res <= 36): raise ValueError
         
+        # Sonuç Değerlendirme
         if state["last_bets"]:
             cost = len(state["last_bets"]) * 10
             state["bakiye"] -= cost
@@ -105,6 +120,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state["history"].append(res)
         targets, d_msg = smart_engine(uid)
         
+        # Bahisleri hazırla
         current_bets = set()
         for t in targets: current_bets.update(get_neighbors(t, 2))
         state["last_bets"] = list(current_bets)
@@ -116,7 +132,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎲 Bahis: {len(state['last_bets'])} sayı"
         )
     except ValueError:
-        await update.message.reply_text("0-36 arası sayı girin.")
+        await update.message.reply_text("0-36 arası bir sayı girin.")
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
