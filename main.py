@@ -6,7 +6,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = {5813833511, 1278793650}
 
-# Avrupa Ruleti Çark Dizilimi
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 
          5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
@@ -28,7 +27,7 @@ def get_user_state(uid):
         user_states[uid] = {
             "bakiye": 0, "history": deque(maxlen=50), 
             "last_main_bets": [], "last_extra_bets": [],
-            "loss_streak": 0, "waiting_for_balance": True
+            "waiting_for_balance": True
         }
     return user_states[uid]
 
@@ -42,7 +41,6 @@ def smart_engine(uid):
     last_num = hist[-1] if hist else 0 
 
     if len(hist) < 3:
-        # Başlangıçta gelen sayı ve tekrarlanan sayı kuralı
         return [0, 10, 20], [last_num, 5, 15, last_num], "🌱 Analiz Hazırlanıyor..."
 
     scores = {num: 0 for num in range(37)}
@@ -52,31 +50,32 @@ def smart_engine(uid):
         dist2 = (WHEEL_MAP[hist[-2]] - WHEEL_MAP[hist[-3]] + 37) % 37
         jump_avg = int(((dist1 + dist2) / 2) * 1.2)
 
-    suggested_by_user = USER_STRATEGY_MAP.get(last_num, [])
     for i, n in enumerate(reversed(hist[-15:])):
         weight = 100 / (1.1**i)
         predicted_idx = (WHEEL_MAP[n] + jump_avg) % 37
         for d in [-5, -2, -1, 0, 1, 2, 5]:
             num = WHEEL[(predicted_idx + d) % 37]
             scores[num] += weight
-            if num in suggested_by_user: scores[num] *= 1.6
+            if num in USER_STRATEGY_MAP.get(last_num, []): scores[num] *= 1.6
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
+    
+    # Main 3 Tahmin
     main_targets = []
     for cand_num, score in sorted_sc:
         if len(main_targets) >= 3: break
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 9 for t in main_targets):
             main_targets.append(cand_num)
 
-    # EKSTRA KURALI: İlk sayı son gelen, ortadakiler yeni, sonuncu tekrar.
+    # Extra 3 Tahmin (İlk sayı son gelenin tekrarı)
     extra_targets = [last_num]
     for cand_num, score in sorted_sc:
         if len(extra_targets) >= 3: break 
         if cand_num not in main_targets and cand_num != last_num:
-            if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 5 for t in (main_targets + extra_targets)):
+            if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in (main_targets + extra_targets)):
                 extra_targets.append(cand_num)
     
-    extra_targets.append(last_num) # 4. sayı tekrar eden sayı
+    extra_targets.append(last_num) # Tekrarlanan numara kuralı
 
     return main_targets, extra_targets, "🚀 Analiz Aktif!"
 
@@ -85,7 +84,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
     reply_markup = ReplyKeyboardMarkup([['/reset']], resize_keyboard=True)
-    await update.message.reply_text("⚖️ SİSTEM BAŞLATILDI\nLütfen başlangıç bakiyenizi girin:", reply_markup=reply_markup)
+    await update.message.reply_text("⚖️ SİSTEM HAZIR\nBakiyenizi girin:", reply_markup=reply_markup)
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -99,7 +98,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
     if not text.isdigit():
-        await update.message.reply_text("⚠️ Hata: Lütfen sadece sayısal değer girin!")
+        await update.message.reply_text("⚠️ Hata: Sadece sayı girin!")
         return
 
     val = int(text)
@@ -107,44 +106,44 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state["waiting_for_balance"]:
         state["bakiye"] = val
         state["waiting_for_balance"] = False
-        await update.message.reply_text(f"💰 Kasa: {val} TL\nŞimdi çarkta çıkan ilk sayıyı girin:")
+        await update.message.reply_text(f"💰 Kasa: {val} TL\nİlk sayıyı girin:")
         return
 
     if val < 0 or val > 36:
-        await update.message.reply_text("⚠️ Hata: 0-36 arası bir sayı girin!")
+        await update.message.reply_text("⚠️ Hata: 0-36 arası sayı girin!")
         return
 
-    # Kazanç/Kayıp Hesaplama
+    # Hesaplama
     total_bets = list(set(state["last_main_bets"] + state["last_extra_bets"]))
     if total_bets:
         cost = len(total_bets) * 10
         state["bakiye"] -= cost
         if val in state["last_main_bets"]:
             state["bakiye"] += 360
-            await update.message.reply_text(f"✅ ANA TAHMİN BİLDİ! (+{360-cost} TL)")
+            await update.message.reply_text(f"✅ MAIN BİLDİ! (+{360-cost} TL)")
         elif val in state["last_extra_bets"]:
             state["bakiye"] += 360
-            await update.message.reply_text(f"🔥 EKSTRA TAHMİN BİLDİ! (+{360-cost} TL)")
+            await update.message.reply_text(f"🔥 EXTRA BİLDİ! (+{360-cost} TL)")
         else:
             await update.message.reply_text(f"❌ KAYIP ({val})")
 
     state["history"].append(val)
     main_t, extra_t, d_msg = smart_engine(uid)
 
-    # Bahisleri Komşularıyla Listeleme
+    # Her iki grup için de 2 komşu (5 sayı) kuralı
     m_bets = set()
     for t in main_t: m_bets.update(get_neighbors(t, 2))
     state["last_main_bets"] = list(m_bets)
 
     e_bets = set()
-    for t in list(set(extra_t)): e_bets.update(get_neighbors(t, 1))
+    for t in list(set(extra_t)): e_bets.update(get_neighbors(t, 2)) # 2 Komşu güncellendi
     state["last_extra_bets"] = list(e_bets)
 
     await update.message.reply_text(
-        f"{d_msg}\n💰 Güncel Kasa: {state['bakiye']} TL\n\n"
+        f"{d_msg}\n💰 Kasa: {state['bakiye']} TL\n\n"
         f"🎯 MAIN (2 Komşu): {main_t}\n"
-        f"⚡ EXTRA (1 Komşu): {extra_t}\n\n"
-        f"🎲 Oynanan Toplam Sayı: {len(set(state['last_main_bets'] + state['last_extra_bets']))}"
+        f"⚡ EXTRA (2 Komşu): {extra_t}\n\n"
+        f"🎲 Toplam: {len(set(state['last_main_bets'] + state['last_extra_bets']))} sayı"
     )
 
 if __name__ == '__main__':
