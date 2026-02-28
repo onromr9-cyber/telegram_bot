@@ -11,7 +11,7 @@ WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10,
          5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
 
-# --- SENİN ÖZEL ANALİZ LİSTEN (STRATEJİK REFERANS) ---
+# --- SENİN ÖZEL STRATEJİK REFERANS LİSTEN ---
 USER_STRATEGY_MAP = {
     0: [6,4,16], 1: [27,23,21], 2: [14,17,8], 3: [5,6,18], 4: [26,7,11], 5: [25,15,35], 
     6: [22,24,12], 7: [21,14,28], 8: [12,32,20], 9: [4,36,22], 10: [26,19,31], 
@@ -36,46 +36,65 @@ def get_neighbors(n, s=2):
 def smart_engine(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
+    loss_streak = state.get("loss_streak", 0)
     
-    if len(hist) < 3:
-        return [hist[-1] if hist else 0, 10, 20], "🌱 Isınma: Veri toplanıyor..."
+    if len(hist) < 5:
+        return [hist[-1] if hist else 0, 10, 20], "🌱 Isınma Modu (%d/5 Veri)..." % len(hist)
 
     last_num = hist[-1]
     scores = {num: 0 for num in range(37)}
 
-    # 1. KATMAN: SENİN ÖZEL LİSTEN (Yüksek Öncelik)
+    # 1. MOMENTUM ANALİZİ (Topun sekme ivmesi)
+    jump_avg = 0
+    if len(hist) >= 3:
+        dist1 = (WHEEL_MAP[hist[-1]] - WHEEL_MAP[hist[-2]] + 37) % 37
+        dist2 = (WHEEL_MAP[hist[-2]] - WHEEL_MAP[hist[-3]] + 37) % 37
+        jump_avg = (dist1 + dist2) // 2
+
+    # 2. HİBRİT PUANLAMA (Liste + İstatistik + Sapma)
     suggested_by_user = USER_STRATEGY_MAP.get(last_num, [])
-    for s_num in suggested_by_user:
-        scores[s_num] += 70  # Liste puanı
-
-    # 2. KATMAN: MATEMATİKSEL ANALİZ (+/- 5 Sapma ve İstatistik)
+    
     for i, n in enumerate(reversed(hist[-15:])):
-        weight = 90 / (1.1**i)
+        weight = 100 / (1.1**i)
         idx = WHEEL_MAP[n]
-        for d in [-5, -1, 0, 1, 5]:
-            scores[WHEEL[(idx + d) % 37]] += weight
+        # İvme tahmini (Jump)
+        predicted_idx = (idx + jump_avg) % 37
+        
+        for d in [-5, -2, -1, 0, 1, 2, 5]:
+            num = WHEEL[(predicted_idx + d) % 37]
+            scores[num] += weight
+            # Eğer sayı senin referans listende varsa puanı %50 artır
+            if num in suggested_by_user:
+                scores[num] *= 1.5
 
-    # 3. KATMAN: ÜÇGEN AÇI VE HİBRİT SEÇİM
+    # 3. DİNAMİK HEDEF SEÇİMİ (Üçgen ve Dar Alan Kontrolü)
     targets = []
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
+    
+    # Kayıp varsa hedefleri birbirine yakınlaştır (Daha dar alan savunması)
+    min_dist = 6 if loss_streak >= 2 else 9 
 
     for cand_num, score in sorted_sc:
         if len(targets) >= 3: break
-        # Üçgen Açı Kontrolü (Hedefler arası en az 8 index mesafe)
-        if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 8 for t in targets):
+        # Geometrik mesafe kontrolü
+        if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= min_dist for t in targets):
             targets.append(cand_num)
 
-    # Mesaj
-    ref_match = any(t in suggested_by_user for t in targets)
-    msg = "🎯 UZMAN HİBRİT: Senin listen ve botun analizi tam uyumlu!" if ref_match else "📐 DİNAMİK ANALİZ: Akış senin listenden saptı, bot denge kuruyor."
-    
+    # Mesaj kurgusu
+    if loss_streak >= 2:
+        msg = "🎯 KESKİN NİŞANCI: Kayıp serisi için dar alan kuşatması!"
+    elif any(t in suggested_by_user for t in targets):
+        msg = "🔥 YÜKSEK GÜVEN: Senin referansın ivme ile eşleşti!"
+    else:
+        msg = "📐 GEOMETRİK ANALİZ: Çark dengesi korunuyor."
+
     return targets[:3], msg
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = {"bakiye": 0, "history": deque(maxlen=50), "last_bets": [], "loss_streak": 0, "waiting_for_balance": True}
-    await update.message.reply_text("🚀 Hibrit Uzman Sistemi Yayında!\n✅ Özel Listen Tanımlandı.\n✅ Üçgen Açı ve +/- 5 Sapma Aktif.\nBaşlangıç bakiyeni gir:")
+    await update.message.reply_text("⚖️ TAM DONANIMLI HİBRİT SİSTEM AKTİF!\n- Özel Listen\n- Momentum/İvme Analizi\n- Üçgen Açı & +/- 5 Sapma\n- Kayıp Serisi Koruması\n\nBakiyenizi girin:")
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -86,7 +105,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text
         if state.get("waiting_for_balance"):
             state["bakiye"] = int(text); state["waiting_for_balance"] = False
-            await update.message.reply_text(f"✅ Bakiye kaydedildi: {state['bakiye']} TL."); return
+            await update.message.reply_text(f"💰 Kasa: {state['bakiye']} TL. İlk sayıyı girin."); return
 
         res = int(text)
         if state["last_bets"]:
@@ -103,7 +122,6 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state["history"].append(res)
         targets, d_msg = smart_engine(uid)
         
-        # 3 Odak ve her birine 2 komşu
         current_bets = set()
         for t in targets:
             current_bets.update(get_neighbors(t, 2))
@@ -112,9 +130,9 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(
             f"{d_msg}\n"
-            f"💰 Bakiye: {state['bakiye']} TL\n"
-            f"🎯 Odaklar: {targets}\n"
-            f"🎲 Bahis: {len(state['last_bets'])} sayı"
+            f"💰 Güncel Kasa: {state['bakiye']} TL\n"
+            f"🎯 Hedef Odaklar: {targets}\n"
+            f"🎲 Toplam Bahis: {len(state['last_bets'])} sayı"
         )
     except ValueError: pass
 
