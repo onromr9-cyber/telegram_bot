@@ -10,6 +10,13 @@ WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10,
          5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
 
+# Çark Bölgeleri (Bilinç Katmanı İçin)
+SECTORS = {
+    "Voisins": [22, 18, 29, 7, 28, 12, 35, 3, 26, 0, 32, 15, 19, 4, 21, 2, 25],
+    "Orphelins": [1, 20, 14, 31, 9, 17, 34, 6],
+    "Tiers": [27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33]
+}
+
 USER_STRATEGY_MAP = {
     0: [6,4,16], 1: [27,23,21], 2: [14,17,8], 3: [5,6,18], 4: [26,7,11], 5: [25,15,35], 
     6: [22,24,12], 7: [21,14,28], 8: [12,32,20], 9: [4,36,22], 10: [26,19,31], 
@@ -35,11 +42,12 @@ def get_neighbors(n, s=2):
     idx = WHEEL_MAP[n]
     return [WHEEL[(idx + i) % 37] for i in range(-s, s + 1)]
 
-def smart_engine_v4(uid):
+def smart_engine_v5(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
     last_num = hist[-1]
     
+    # 1. STANDART PUANLAMA (Main & Extra için)
     scores = {num: 0 for num in range(37)}
     jump_avg = 0
     if len(hist) >= 3:
@@ -50,41 +58,50 @@ def smart_engine_v4(uid):
     for i, n in enumerate(reversed(hist[-15:])):
         decay = 100 / (1.1**i)
         p_idx = (WHEEL_MAP[n] + jump_avg) % 37
-        for d in [-3, -1, 0, 1, 3]:
+        for d in [-2, 0, 2]:
             num = WHEEL[(p_idx + d) % 37]
             scores[num] += decay
-            if num in USER_STRATEGY_MAP.get(last_num, []): scores[num] *= 1.8
+            if num in USER_STRATEGY_MAP.get(last_num, []): scores[num] *= 2.0
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
-    # 🎯 MAIN: En güçlü 3 odak
+    # Main & Extra Seçimi
     main_targets = []
     for cand_num, _ in sorted_sc:
         if len(main_targets) >= 3: break
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_targets):
             main_targets.append(cand_num)
 
-    # ⚡ EXTRA: Son gelen + 2 yeni
     extra_targets = [last_num]
     for cand_num, _ in sorted_sc:
         if len(extra_targets) >= 3: break 
         if cand_num not in main_targets and cand_num not in extra_targets:
             extra_targets.append(cand_num)
 
-    # 🔥 OLASILIK: En yoğun ortalamalı 2 çekirdek sayı
+    # 2. OLASILIK BİLİNCİ (Bölge Analizi)
+    # Son 10 sayının hangi bölgelere düştüğünü hesapla
+    sector_counts = {"Voisins": 0, "Orphelins": 0, "Tiers": 0}
+    for n in hist[-10:]:
+        for sector, nums in SECTORS.items():
+            if n in nums: sector_counts[sector] += 1
+    
+    # En çok hit alan bölgeyi bul (Hot Sector)
+    hot_sector = max(sector_counts, key=sector_counts.get)
+    
+    # Olasılık tahmini için o bölge içindeki en yüksek puanlı 2 sayıyı seç
     prob_targets = []
     for cand_num, _ in sorted_sc:
         if len(prob_targets) >= 2: break
-        if cand_num not in main_targets and cand_num not in extra_targets:
+        if cand_num in SECTORS[hot_sector] and cand_num not in main_targets and cand_num not in extra_targets:
             prob_targets.append(cand_num)
-
-    return main_targets, extra_targets, prob_targets
+            
+    return main_targets, extra_targets, prob_targets, hot_sector
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("⚖️ AI HYBRID V4 - ANALİZ SİSTEMİ\nIsınma Modu: İlk 10 sayıyı girin.", 
+    await update.message.reply_text("⚖️ AI HYBRID V5 - BÖLGESEL BİLİNÇ AKTİF\nİlk 10 ısınma sayısını girin.", 
                                    reply_markup=ReplyKeyboardMarkup([['/reset']], resize_keyboard=True))
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -103,7 +120,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state["waiting_for_balance"]:
         state["bakiye"] = val
         state["waiting_for_balance"] = False
-        await update.message.reply_text(f"💰 Kasa: {val} TL. Başlıyoruz!"); return
+        await update.message.reply_text(f"💰 Kasa: {val} TL. Bol şans!"); return
 
     if state["is_learning"]:
         state["history"].append(val)
@@ -111,9 +128,9 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"📥 Veri: {len(state['history'])}/10"); return
         else:
             state["is_learning"] = False; state["waiting_for_balance"] = True
-            await update.message.reply_text("✅ Analiz hazır. Bakiyenizi girin:"); return
+            await update.message.reply_text("✅ Isınma Bitti. Bakiyenizi girin:"); return
 
-    # Hesaplama
+    # Bahis Sonuçlandırma
     all_bets = list(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
     if all_bets:
         state["bakiye"] -= len(all_bets) * 10
@@ -121,12 +138,12 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state["bakiye"] += 360
             await update.message.reply_text("✅ KAZANDI!")
         else:
-            await update.message.reply_text(f"❌ PAS ({val})")
+            await update.message.reply_text(f"❌ KAYIP ({val})")
 
     state["history"].append(val)
-    main_t, extra_t, prob_t = smart_engine_v4(uid)
+    main_t, extra_t, prob_t, hot_zone = smart_engine_v5(uid)
 
-    # Bahisleri Hazırla (Hepsi 2 Komşu)
+    # Bahisler (2 Komşu)
     m_b = set(); [m_b.update(get_neighbors(t, 2)) for t in main_t]
     e_b = set(); [e_b.update(get_neighbors(t, 2)) for t in extra_t]
     p_b = set(); [p_b.update(get_neighbors(t, 2)) for t in prob_t]
@@ -137,8 +154,8 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💰 Kasa: {state['bakiye']} TL\n\n"
         f"🎯 MAIN: {main_t}\n"
         f"⚡ EXTRA: {extra_t}\n"
-        f"🔥 OLASILIK: {prob_t}\n\n"
-        f"🎲 Toplam: {len(set(state['last_main_bets'] + state['last_extra_bets'] + state['last_prob_bets']))} sayı"
+        f"🔥 OLASILIK ({hot_zone}): {prob_t}\n\n"
+        f"🎲 Toplam Bahis: {len(set(state['last_main_bets'] + state['last_extra_bets'] + state['last_prob_bets']))} sayı"
     )
 
 if __name__ == '__main__':
