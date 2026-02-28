@@ -10,7 +10,6 @@ WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10,
          5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
 
-# Çark Bölgeleri (Bilinç Katmanı İçin)
 SECTORS = {
     "Voisins": [22, 18, 29, 7, 28, 12, 35, 3, 26, 0, 32, 15, 19, 4, 21, 2, 25],
     "Orphelins": [1, 20, 14, 31, 9, 17, 34, 6],
@@ -47,7 +46,6 @@ def smart_engine_v5(uid):
     hist = list(state["history"])
     last_num = hist[-1]
     
-    # 1. STANDART PUANLAMA (Main & Extra için)
     scores = {num: 0 for num in range(37)}
     jump_avg = 0
     if len(hist) >= 3:
@@ -65,30 +63,25 @@ def smart_engine_v5(uid):
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
-    # Main & Extra Seçimi
     main_targets = []
     for cand_num, _ in sorted_sc:
         if len(main_targets) >= 3: break
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_targets):
             main_targets.append(cand_num)
 
-    extra_targets = [last_num]
+    extra_targets = [last_num] # Kural: İlk sayı son gelenin tekrarı
     for cand_num, _ in sorted_sc:
         if len(extra_targets) >= 3: break 
         if cand_num not in main_targets and cand_num not in extra_targets:
             extra_targets.append(cand_num)
 
-    # 2. OLASILIK BİLİNCİ (Bölge Analizi)
-    # Son 10 sayının hangi bölgelere düştüğünü hesapla
     sector_counts = {"Voisins": 0, "Orphelins": 0, "Tiers": 0}
     for n in hist[-10:]:
         for sector, nums in SECTORS.items():
             if n in nums: sector_counts[sector] += 1
     
-    # En çok hit alan bölgeyi bul (Hot Sector)
     hot_sector = max(sector_counts, key=sector_counts.get)
     
-    # Olasılık tahmini için o bölge içindeki en yüksek puanlı 2 sayıyı seç
     prob_targets = []
     for cand_num, _ in sorted_sc:
         if len(prob_targets) >= 2: break
@@ -101,7 +94,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("⚖️ AI HYBRID V5 - BÖLGESEL BİLİNÇ AKTİF\nİlk 10 ısınma sayısını girin.", 
+    await update.message.reply_text("⚖️ AI HYBRID V5 - KAZANÇ TAKİBİ AKTİF\nIsınma: İlk 10 sayıyı girin.", 
                                    reply_markup=ReplyKeyboardMarkup([['/reset']], resize_keyboard=True))
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -120,7 +113,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state["waiting_for_balance"]:
         state["bakiye"] = val
         state["waiting_for_balance"] = False
-        await update.message.reply_text(f"💰 Kasa: {val} TL. Bol şans!"); return
+        await update.message.reply_text(f"💰 Başlangıç Kasası: {val} TL. Bol şans!"); return
 
     if state["is_learning"]:
         state["history"].append(val)
@@ -130,32 +123,39 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state["is_learning"] = False; state["waiting_for_balance"] = True
             await update.message.reply_text("✅ Isınma Bitti. Bakiyenizi girin:"); return
 
-    # Bahis Sonuçlandırma
+    # Bahis Sonuçlandırma ve Kazanç Ekranı
     all_bets = list(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
     if all_bets:
-        state["bakiye"] -= len(all_bets) * 10
+        bet_cost = len(all_bets) * 10
+        state["bakiye"] -= bet_cost
+        
         if val in all_bets:
-            state["bakiye"] += 360
-            await update.message.reply_text("✅ KAZANDI!")
+            win_amount = 360
+            net_profit = win_amount - bet_cost
+            state["bakiye"] += win_amount
+            result_msg = f"✅ KAZANDI!\n💵 Bahis: {bet_cost} TL\n💰 Net Kazanç: +{net_profit} TL"
         else:
-            await update.message.reply_text(f"❌ KAYIP ({val})")
+            result_msg = f"❌ KAYIP ({val})\n💵 Bahis: {bet_cost} TL"
+        
+        await update.message.reply_text(result_msg)
 
     state["history"].append(val)
     main_t, extra_t, prob_t, hot_zone = smart_engine_v5(uid)
 
-    # Bahisler (2 Komşu)
     m_b = set(); [m_b.update(get_neighbors(t, 2)) for t in main_t]
     e_b = set(); [e_b.update(get_neighbors(t, 2)) for t in extra_t]
     p_b = set(); [p_b.update(get_neighbors(t, 2)) for t in prob_t]
 
     state["last_main_bets"], state["last_extra_bets"], state["last_prob_bets"] = list(m_b), list(e_b), list(p_b)
+    total_nums = len(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
 
     await update.message.reply_text(
-        f"💰 Kasa: {state['bakiye']} TL\n\n"
+        f"💰 GÜNCEL KASA: {state['bakiye']} TL\n"
+        f"📝 Bir sonraki el maliyeti: {total_nums * 10} TL\n\n"
         f"🎯 MAIN: {main_t}\n"
         f"⚡ EXTRA: {extra_t}\n"
         f"🔥 OLASILIK ({hot_zone}): {prob_t}\n\n"
-        f"🎲 Toplam Bahis: {len(set(state['last_main_bets'] + state['last_extra_bets'] + state['last_prob_bets']))} sayı"
+        f"🎲 Toplam: {total_nums} sayı"
     )
 
 if __name__ == '__main__':
