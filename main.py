@@ -26,7 +26,14 @@ user_states = {}
 
 def get_user_state(uid):
     if uid not in user_states:
-        user_states[uid] = {"bakiye": 0, "history": deque(maxlen=50), "last_bets": [], "loss_streak": 0, "waiting_for_balance": True}
+        user_states[uid] = {
+            "bakiye": 0, 
+            "history": deque(maxlen=50), 
+            "last_bets": [], 
+            "loss_streak": 0, 
+            "waiting_for_balance": True,
+            "predicted_history": deque(maxlen=2) # Gecikme kontrolü için son 2 tahmin
+        }
     return user_states[uid]
 
 def get_neighbors(n, s=2):
@@ -44,57 +51,75 @@ def smart_engine(uid):
     last_num = hist[-1]
     scores = {num: 0 for num in range(37)}
 
-    # 1. MOMENTUM ANALİZİ (Topun sekme ivmesi)
+    # 1. GECİKMELİ TAKİP (Son 2 turda çıkmayan sıcak rakamlar)
+    for past_targets in state["predicted_history"]:
+        for p_num in past_targets:
+            scores[p_num] += 45 # Gecikme telafi puanı
+
+    # 2. MOMENTUM & İLERİ PROJEKSİYON (İvme hesabı)
     jump_avg = 0
     if len(hist) >= 3:
         dist1 = (WHEEL_MAP[hist[-1]] - WHEEL_MAP[hist[-2]] + 37) % 37
         dist2 = (WHEEL_MAP[hist[-2]] - WHEEL_MAP[hist[-3]] + 37) % 37
-        jump_avg = (dist1 + dist2) // 2
+        # Gecikmeyi önlemek için ivmeyi %20 ileri kaydırıyoruz
+        jump_avg = int(((dist1 + dist2) / 2) * 1.2)
 
-    # 2. HİBRİT PUANLAMA (Liste + İstatistik + Sapma)
+    # 3. HİBRİT PUANLAMA (Senin Listen + Matematik + İvme)
     suggested_by_user = USER_STRATEGY_MAP.get(last_num, [])
     
     for i, n in enumerate(reversed(hist[-15:])):
         weight = 100 / (1.1**i)
         idx = WHEEL_MAP[n]
-        # İvme tahmini (Jump)
+        # İleriyi hedefleyen index
         predicted_idx = (idx + jump_avg) % 37
         
         for d in [-5, -2, -1, 0, 1, 2, 5]:
             num = WHEEL[(predicted_idx + d) % 37]
             scores[num] += weight
-            # Eğer sayı senin referans listende varsa puanı %50 artır
             if num in suggested_by_user:
-                scores[num] *= 1.5
+                scores[num] *= 1.6 # Senin listene yüksek güven
 
-    # 3. DİNAMİK HEDEF SEÇİMİ (Üçgen ve Dar Alan Kontrolü)
+    # 4. DİNAMİK HEDEF SEÇİMİ (Farklılık Garantisi & Üçgen Açı)
     targets = []
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
-    # Kayıp varsa hedefleri birbirine yakınlaştır (Daha dar alan savunması)
-    min_dist = 6 if loss_streak >= 2 else 9 
+    # Bir önceki elin tıpatıp aynısını vermemek için kontrol
+    last_predictions = state["predicted_history"][-1] if state["predicted_history"] else []
 
     for cand_num, score in sorted_sc:
         if len(targets) >= 3: break
-        # Geometrik mesafe kontrolü
+        
+        # Çeşitlilik kuralı: En az 1-2 rakam yeni olsun
+        if cand_num in last_predictions and len(targets) < 1:
+            continue
+
+        # Geometrik mesafe (Üçgen açı)
+        min_dist = 6 if loss_streak >= 2 else 9 
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= min_dist for t in targets):
             targets.append(cand_num)
 
+    # Yeni tahminleri gecikme takibi için hafızaya al
+    state["predicted_history"].append(targets)
+
     # Mesaj kurgusu
     if loss_streak >= 2:
-        msg = "🎯 KESKİN NİŞANCI: Kayıp serisi için dar alan kuşatması!"
+        msg = "🎯 NOKTA ATIŞI: Gecikme payı ivmeye eklendi!"
     elif any(t in suggested_by_user for t in targets):
-        msg = "🔥 YÜKSEK GÜVEN: Senin referansın ivme ile eşleşti!"
+        msg = "⏳ GECİKME TELAFİSİ: Senin referansın ve pusu listesi eşleşti!"
     else:
-        msg = "📐 GEOMETRİK ANALİZ: Çark dengesi korunuyor."
+        msg = "📐 GEOMETRİK ANALİZ: Çark ritmi kontrol ediliyor."
 
     return targets[:3], msg
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
-    user_states[uid] = {"bakiye": 0, "history": deque(maxlen=50), "last_bets": [], "loss_streak": 0, "waiting_for_balance": True}
-    await update.message.reply_text("⚖️ TAM DONANIMLI HİBRİT SİSTEM AKTİF!\n- Özel Listen\n- Momentum/İvme Analizi\n- Üçgen Açı & +/- 5 Sapma\n- Kayıp Serisi Koruması\n\nBakiyenizi girin:")
+    user_states[uid] = {
+        "bakiye": 0, "history": deque(maxlen=50), "last_bets": [], 
+        "loss_streak": 0, "waiting_for_balance": True,
+        "predicted_history": deque(maxlen=2)
+    }
+    await update.message.reply_text("⚖️ ZAMAN KAYMALI HİBRİT SİSTEM AKTİF!\n- Gecikme Telafisi (Son 2 Tur)\n- İleri Projeksiyon (+%20 İvme)\n- Özel Listen & Üçgen Açı\n\nBakiyenizi girin:")
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -131,7 +156,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"{d_msg}\n"
             f"💰 Güncel Kasa: {state['bakiye']} TL\n"
-            f"🎯 Hedef Odaklar: {targets}\n"
+            f"🎯 Tahmin Odakları: {targets}\n"
             f"🎲 Toplam Bahis: {len(state['last_bets'])} sayı"
         )
     except ValueError: pass
