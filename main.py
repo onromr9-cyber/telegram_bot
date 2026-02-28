@@ -6,6 +6,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = {5813833511, 1278793650}
 
+# Avrupa Ruleti Çark Dizilimi
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 
          5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
@@ -27,8 +28,7 @@ def get_user_state(uid):
         user_states[uid] = {
             "bakiye": 0, "history": deque(maxlen=50), 
             "last_main_bets": [], "last_extra_bets": [],
-            "loss_streak": 0, "waiting_for_balance": True,
-            "predicted_history": deque(maxlen=2)
+            "loss_streak": 0, "waiting_for_balance": True
         }
     return user_states[uid]
 
@@ -39,14 +39,13 @@ def get_neighbors(n, s=2):
 def smart_engine(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
-    
-    if len(hist) < 5:
-        # İstediğin özel format (Tekrarlanan numaralı extra)
-        return [0, 10, 20], [5, 15, 25, 25], "🌱 Analiz Hazırlanıyor..."
+    last_num = hist[-1] if hist else 0 
 
-    last_num = hist[-1]
+    if len(hist) < 3:
+        # Başlangıçta gelen sayı ve tekrarlanan sayı kuralı
+        return [0, 10, 20], [last_num, 5, 15, last_num], "🌱 Analiz Hazırlanıyor..."
+
     scores = {num: 0 for num in range(37)}
-
     jump_avg = 0
     if len(hist) >= 3:
         dist1 = (WHEEL_MAP[hist[-1]] - WHEEL_MAP[hist[-2]] + 37) % 37
@@ -64,21 +63,20 @@ def smart_engine(uid):
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     main_targets = []
-    extra_targets = []
-
     for cand_num, score in sorted_sc:
         if len(main_targets) >= 3: break
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 9 for t in main_targets):
             main_targets.append(cand_num)
 
+    # EKSTRA KURALI: İlk sayı son gelen, ortadakiler yeni, sonuncu tekrar.
+    extra_targets = [last_num]
     for cand_num, score in sorted_sc:
-        if len(extra_targets) >= 3: break # 3 tane seçiyoruz, 4. tekrar olacak
-        if cand_num not in main_targets and all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 5 for t in (main_targets + extra_targets)):
-            extra_targets.append(cand_num)
+        if len(extra_targets) >= 3: break 
+        if cand_num not in main_targets and cand_num != last_num:
+            if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 5 for t in (main_targets + extra_targets)):
+                extra_targets.append(cand_num)
     
-    # Kural Gereği: Extra listesine bir numarayı tekrar ekle
-    if extra_targets:
-        extra_targets.append(extra_targets[0]) 
+    extra_targets.append(last_num) # 4. sayı tekrar eden sayı
 
     return main_targets, extra_targets, "🚀 Analiz Aktif!"
 
@@ -86,14 +84,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    # Reset butonu için basit bir klavye
     reply_markup = ReplyKeyboardMarkup([['/reset']], resize_keyboard=True)
-    await update.message.reply_text("⚖️ SİSTEM HAZIR\nBakiyenizi girin:", reply_markup=reply_markup)
+    await update.message.reply_text("⚖️ SİSTEM BAŞLATILDI\nLütfen başlangıç bakiyenizi girin:", reply_markup=reply_markup)
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if uid in user_states:
-        del user_states[uid]
+    if uid in user_states: del user_states[uid]
     await start(update, context)
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -102,60 +98,54 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_user_state(uid)
     text = update.message.text.strip()
 
-    # Sayı kontrolü ve Hata yakalama
     if not text.isdigit():
-        await update.message.reply_text("⚠️ Lütfen sadece sayı giriniz! (Örn: 500 veya 17)")
+        await update.message.reply_text("⚠️ Hata: Lütfen sadece sayısal değer girin!")
         return
 
     val = int(text)
-    
-    # Rulet sayı aralığı kontrolü
-    if not state["waiting_for_balance"] and (val < 0 or val > 36):
-        await update.message.reply_text("⚠️ Geçersiz numara! 0-36 arası bir sayı girin.")
+
+    if state["waiting_for_balance"]:
+        state["bakiye"] = val
+        state["waiting_for_balance"] = False
+        await update.message.reply_text(f"💰 Kasa: {val} TL\nŞimdi çarkta çıkan ilk sayıyı girin:")
         return
 
-    try:
-        if state["waiting_for_balance"]:
-            state["bakiye"] = val
-            state["waiting_for_balance"] = False
-            await update.message.reply_text(f"💰 Kasa ayarlandı: {val} TL. Şimdi gelen ilk sayıyı girin:")
-            return
+    if val < 0 or val > 36:
+        await update.message.reply_text("⚠️ Hata: 0-36 arası bir sayı girin!")
+        return
 
-        res = val
-        total_bets = state["last_main_bets"] + state["last_extra_bets"]
-        
-        if total_bets:
-            cost = len(set(total_bets)) * 10
-            state["bakiye"] -= cost
-            if res in state["last_main_bets"]:
-                state["bakiye"] += 360
-                await update.message.reply_text(f"✅ KAZANDI! (+{360-cost} TL)")
-            elif res in state["last_extra_bets"]:
-                state["bakiye"] += 360
-                await update.message.reply_text(f"🔥 EKSTRA KAZANDI! (+{360-cost} TL)")
-            else:
-                await update.message.reply_text(f"❌ KAYIP ({res})")
-        
-        state["history"].append(res)
-        main_t, extra_t, d_msg = smart_engine(uid)
-        
-        # Bahis Hazırlığı
-        m_bets = set()
-        for t in main_t: m_bets.update(get_neighbors(t, 2))
-        state["last_main_bets"] = list(m_bets)
+    # Kazanç/Kayıp Hesaplama
+    total_bets = list(set(state["last_main_bets"] + state["last_extra_bets"]))
+    if total_bets:
+        cost = len(total_bets) * 10
+        state["bakiye"] -= cost
+        if val in state["last_main_bets"]:
+            state["bakiye"] += 360
+            await update.message.reply_text(f"✅ ANA TAHMİN BİLDİ! (+{360-cost} TL)")
+        elif val in state["last_extra_bets"]:
+            state["bakiye"] += 360
+            await update.message.reply_text(f"🔥 EKSTRA TAHMİN BİLDİ! (+{360-cost} TL)")
+        else:
+            await update.message.reply_text(f"❌ KAYIP ({val})")
 
-        e_bets = set()
-        for t in list(set(extra_t)): e_bets.update(get_neighbors(t, 1))
-        state["last_extra_bets"] = list(e_bets)
+    state["history"].append(val)
+    main_t, extra_t, d_msg = smart_engine(uid)
 
-        await update.message.reply_text(
-            f"{d_msg}\n💰 Kasa: {state['bakiye']} TL\n\n"
-            f"🎯 MAIN: {main_t}\n"
-            f"⚡ EXTRA: {extra_t}\n\n"
-            f"🎲 Toplam: {len(set(state['last_main_bets'] + state['last_extra_bets']))} sayı"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ Bir hata oluştu, lütfen tekrar deneyin.")
+    # Bahisleri Komşularıyla Listeleme
+    m_bets = set()
+    for t in main_t: m_bets.update(get_neighbors(t, 2))
+    state["last_main_bets"] = list(m_bets)
+
+    e_bets = set()
+    for t in list(set(extra_t)): e_bets.update(get_neighbors(t, 1))
+    state["last_extra_bets"] = list(e_bets)
+
+    await update.message.reply_text(
+        f"{d_msg}\n💰 Güncel Kasa: {state['bakiye']} TL\n\n"
+        f"🎯 MAIN (2 Komşu): {main_t}\n"
+        f"⚡ EXTRA (1 Komşu): {extra_t}\n\n"
+        f"🎲 Oynanan Toplam Sayı: {len(set(state['last_main_bets'] + state['last_extra_bets']))}"
+    )
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
