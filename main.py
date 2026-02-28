@@ -85,7 +85,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    reply_markup = ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True)
+    reply_markup = ReplyKeyboardMarkup([['↩️ Geri Al', '/reset']], resize_keyboard=True)
     await update.message.reply_text("🎯 SNIPER V7.1 AKTİF\nIsınma: İlk 10 sayıyı girin.", reply_markup=reply_markup)
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,7 +134,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"📥 Isınma: {len(state['history'])}/10"); return
         else:
             state["waiting_for_balance"] = True
-            await update.message.reply_text("✅ Isınma bitti. Lütfen kasanızı (istediğiniz tutarı) girin:"); return
+            await update.message.reply_text("✅ Isınma bitti. Lütfen kasanızı girin:"); return
 
     # Rakam Kontrolü
     if val < 0 or val > 36:
@@ -173,9 +173,9 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"💰 KASA: {state['bakiye']} TL | 📢 Birim: {state['last_unit']} TL\n"
         f"💸 Toplam Bahis: {total_nums * state['last_unit']} TL (%15)\n\n"
-        f"🎯 MAIN (2k): {main_t}\n"
-        f"⚡ EXTRA (1k): {extra_t}\n"
-        f"🔥 OLASILIK (1k): {prob_t}\n\n"
+        f"🎯 MAIN : {main_t}\n"
+        f"⚡ EXTRA : {extra_t}\n"
+        f"🔥 ŞANS : {prob_t}\n\n"
         f"🎲 Toplam: {total_nums} sayı"
     )
 
@@ -185,4 +185,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("reset", reset_bot))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
     app.run_polling()
+
 
