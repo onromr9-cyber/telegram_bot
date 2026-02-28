@@ -6,6 +6,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = {5813833511, 1278793650}
 
+# Avrupa Ruleti Çark Dizilimi
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 
          5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
@@ -41,7 +42,7 @@ def smart_engine(uid):
     last_num = hist[-1] if hist else 0 
 
     if len(hist) < 3:
-        return [0, 10, 20], [last_num, 5, 15, last_num], "🌱 Analiz Hazırlanıyor..."
+        return [0, 10, 20], [last_num, 5, 15], "🌱 Analiz Hazırlanıyor..."
 
     scores = {num: 0 for num in range(37)}
     jump_avg = 0
@@ -60,22 +61,20 @@ def smart_engine(uid):
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
-    # Main 3 Tahmin
+    # Main: 3 Sayı
     main_targets = []
     for cand_num, score in sorted_sc:
         if len(main_targets) >= 3: break
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 9 for t in main_targets):
             main_targets.append(cand_num)
 
-    # Extra 3 Tahmin (İlk sayı son gelenin tekrarı)
+    # Extra: 3 Sayı (İlk sayı son gelen, sonra 2 yeni sayı, tekrar yok)
     extra_targets = [last_num]
     for cand_num, score in sorted_sc:
         if len(extra_targets) >= 3: break 
         if cand_num not in main_targets and cand_num != last_num:
-            if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in (main_targets + extra_targets)):
+            if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 6 for t in (main_targets + extra_targets)):
                 extra_targets.append(cand_num)
-    
-    extra_targets.append(last_num) # Tekrarlanan numara kuralı
 
     return main_targets, extra_targets, "🚀 Analiz Aktif!"
 
@@ -100,7 +99,6 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text.isdigit():
         await update.message.reply_text("⚠️ Hata: Sadece sayı girin!")
         return
-
     val = int(text)
 
     if state["waiting_for_balance"]:
@@ -113,7 +111,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Hata: 0-36 arası sayı girin!")
         return
 
-    # Hesaplama
+    # Hesaplama (Set kullanarak aynı sayıları bir kez sayar)
     total_bets = list(set(state["last_main_bets"] + state["last_extra_bets"]))
     if total_bets:
         cost = len(total_bets) * 10
@@ -130,13 +128,13 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state["history"].append(val)
     main_t, extra_t, d_msg = smart_engine(uid)
 
-    # Her iki grup için de 2 komşu (5 sayı) kuralı
+    # 2 Komşu (5 sayı) kuralı her iki grup için de geçerli
     m_bets = set()
     for t in main_t: m_bets.update(get_neighbors(t, 2))
     state["last_main_bets"] = list(m_bets)
 
     e_bets = set()
-    for t in list(set(extra_t)): e_bets.update(get_neighbors(t, 2)) # 2 Komşu güncellendi
+    for t in extra_t: e_bets.update(get_neighbors(t, 2))
     state["last_extra_bets"] = list(e_bets)
 
     await update.message.reply_text(
