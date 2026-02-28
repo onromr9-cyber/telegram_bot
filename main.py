@@ -7,7 +7,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = {5813833511, 1278793650}
 
-# Avrupa Ruleti Çark Dizilimi
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 
          5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 
@@ -17,13 +16,8 @@ user_states = {}
 def get_user_state(uid):
     if uid not in user_states:
         user_states[uid] = {
-            "bakiye": 0, 
-            "history": deque(maxlen=50), 
-            "last_bets": [], 
-            "loss_streak": 0, 
-            "waiting_for_balance": True,
-            "forbidden_regions": deque(maxlen=2), # Yasaklı bölgeler
-            "last_region": None # Son tahmin bölgesi
+            "bakiye": 0, "history": deque(maxlen=50), 
+            "last_bets": [], "loss_streak": 0, "waiting_for_balance": True
         }
     return user_states[uid]
 
@@ -36,66 +30,51 @@ def smart_engine(uid):
     hist = list(state["history"])
     loss_streak = state.get("loss_streak", 0)
     
-    if len(hist) < 5:
-        return [0, 10, 20], "🌱 Isınma Modu: Veri toplanıyor..."
+    if len(hist) < 3:
+        return [0, 10, 20], "🌱 Analiz başlatılıyor..."
 
-    # Bölge Tanımları
-    regions = {
-        "V": [22, 18, 29, 7, 28, 12, 35, 3, 26, 0, 32, 15, 19, 4, 21, 2, 25],
-        "T": [27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33],
-        "O": [1, 20, 14, 31, 9, 17, 34, 6]
-    }
-
-    # 1. İNAT KIRMA: 2 el üst üste kaybedilen bölgeyi yasakla (KeyError düzeltildi)
-    current_last_region = state.get("last_region")
-    if loss_streak >= 2 and current_last_region:
-        if current_last_region not in state["forbidden_regions"]:
-            state["forbidden_regions"].append(current_last_region)
-
-    # 2. ANALİZ: Son 7 sayıya göre +1 kaydırmalı ağırlık
-    scores = {num: 0 for num in range(37)}
-    for i, n in enumerate(reversed(hist[-7:])):
-        weight = 100 / (1.2**i)
-        idx = WHEEL_MAP[n]
-        # Zamanlama hatasını önlemek için tahminleri +1 kaydır
-        corrected_idx = (idx + 1) % 37 
-        for d in [-2, -1, 0, 1, 2]:
-            scores[WHEEL[(corrected_idx + d) % 37]] += weight
-
-    # 3. YASAKLI BÖLGE FİLTRESİ
-    sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
+    last_num = hist[-1]
+    last_idx = WHEEL_MAP[last_num]
+    
+    # --- SENİN ÖNERİN: ÇAPRAZ SORGULAMA MANTIĞI ---
+    # Çarkın tam karşısındaki index (180 derece)
+    opposite_idx = (last_idx + 18) % 37
+    opposite_num = WHEEL[opposite_idx]
+    
     targets = []
     
-    for cand_num, score in sorted_sc:
-        if len(targets) >= 3: break
+    if loss_streak >= 1:
+        # KAYIP VARSA: Çapraz (Aynalama) Modu Aktif
+        # 1. Hedef: Son gelenin tam karşısı
+        targets.append(opposite_num)
         
-        # Sayının hangi bölgede olduğunu bul
-        cand_region = next((k for k, v in regions.items() if cand_num in v), None)
+        # 2. Hedef: Karşı tarafın 3 yanındaki komşusu (Çapraz Kayma)
+        targets.append(WHEEL[(opposite_idx + 3) % 37])
         
-        # Eğer bölge yasaklı değilse ekle
-        if cand_region not in state["forbidden_regions"]:
-            targets.append(cand_num)
-            state["last_region"] = cand_region
+        # 3. Hedef: Karşı tarafın -3 yanındaki komşusu
+        targets.append(WHEEL[(opposite_idx - 3) % 37])
+        
+        learning_msg = f"🔄 ÇAPRAZ MOD: {last_num} sayısının tam karşısı ({opposite_num}) hedeflendi."
+    else:
+        # KAZANÇ VARSA VEYA İLK ELDEYSE: Sıcak Takip
+        scores = {num: 0 for num in range(37)}
+        for i, n in enumerate(reversed(hist[-10:])):
+            weight = 100 / (1.1**i)
+            idx = WHEEL_MAP[n]
+            for d in [-2, -1, 0, 1, 2]:
+                scores[WHEEL[(idx + d) % 37]] += weight
+        
+        sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
+        targets = [sorted_sc[0][0], last_num, sorted_sc[1][0]]
+        learning_msg = "📊 NORMAL MOD: Sıcak bölge ve akış takibi yapılıyor."
 
-    # Yedek Plan: Yasaklardan dolayı hedef kalmazsa çarkın zıt tarafına bak
-    if not targets:
-        last_idx = WHEEL_MAP[hist[-1]]
-        targets = [WHEEL[(last_idx + 18) % 37], WHEEL[(last_idx + 10) % 37], 0]
-        state["last_region"] = "ZIT"
-
-    msg = f"🔄 Dinamik Analiz: {'Yasaklı bölge atlandı' if state['forbidden_regions'] else 'Akış takip ediliyor'}"
-    return targets[:3], msg
+    return targets[:3], learning_msg
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
-    # State'i tamamen sıfırla
-    user_states[uid] = {
-        "bakiye": 0, "history": deque(maxlen=50), "last_bets": [], 
-        "loss_streak": 0, "waiting_for_balance": True, 
-        "forbidden_regions": deque(maxlen=2), "last_region": None
-    }
-    await update.message.reply_text("⚖️ Sistem Başlatıldı.\nİnat kırma ve zamanlama düzeltme aktif.\nBaşlangıç bakiyenizi girin:")
+    user_states[uid] = {"bakiye": 0, "history": deque(maxlen=50), "last_bets": [], "loss_streak": 0, "waiting_for_balance": True}
+    await update.message.reply_text("⚖️ Çapraz Sorgu (Mirroring) Sistemi Yüklendi.\nKayıp yaşandığında çarkın tam zıt tarafına odaklanır.\nBakiyenizi girin:")
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -104,28 +83,18 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         text = update.message.text
-        
-        # Bakiye Girişi
         if state.get("waiting_for_balance"):
-            try:
-                state["bakiye"] = int(text)
-                state["waiting_for_balance"] = False
-                await update.message.reply_text(f"✅ Bakiye {state['bakiye']} TL. İlk sayıyı girin.")
-            except ValueError:
-                await update.message.reply_text("Lütfen sadece rakam girin.")
-            return
+            state["bakiye"] = int(text); state["waiting_for_balance"] = False
+            await update.message.reply_text(f"✅ Bakiye {state['bakiye']} TL. Başlayalım."); return
 
         res = int(text)
         if not (0 <= res <= 36): raise ValueError
         
-        # Kazanç Değerlendirme
         if state["last_bets"]:
             cost = len(state["last_bets"]) * 10
             state["bakiye"] -= cost
             if res in state["last_bets"]:
-                state["bakiye"] += 360
-                state["loss_streak"] = 0
-                state["forbidden_regions"].clear()
+                state["bakiye"] += 360; state["loss_streak"] = 0
                 msg = f"✅ KAZANDINIZ! (+{360-cost} TL)"
             else:
                 state["loss_streak"] += 1
@@ -135,23 +104,18 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state["history"].append(res)
         targets, d_msg = smart_engine(uid)
         
-        # Bahisleri Hesapla (3 Hedef + 2'şer Komşu)
         current_bets = set()
-        for t in targets:
-            current_bets.update(get_neighbors(t, 2))
-        
+        for t in targets: current_bets.update(get_neighbors(t, 2))
         state["last_bets"] = list(current_bets)
         
         await update.message.reply_text(
             f"{d_msg}\n"
-            f"🚫 Pas Geçilen Bölgeler: {list(state['forbidden_regions'])}\n"
-            f"💰 Güncel Bakiye: {state['bakiye']} TL\n"
-            f"🎯 Hedefler: {targets}\n"
-            f"🎲 Toplam: {len(state['last_bets'])} sayı"
+            f"💰 Bakiye: {state['bakiye']} TL\n"
+            f"🎯 Odaklar: {targets}\n"
+            f"🎲 Bahis: {len(state['last_bets'])} sayı"
         )
-        
     except ValueError:
-        await update.message.reply_text("Lütfen 0-36 arası bir sayı girin.")
+        await update.message.reply_text("0-36 arası bir sayı girin.")
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
