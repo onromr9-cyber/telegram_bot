@@ -1,4 +1,5 @@
 import os
+import math
 from collections import deque
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -33,7 +34,7 @@ def get_user_state(uid):
         user_states[uid] = {
             "bakiye": 0, "history": deque(maxlen=50), 
             "last_main_bets": [], "last_extra_bets": [], "last_prob_bets": [],
-            "is_learning": True, "waiting_for_balance": False
+            "last_unit": 0, "is_learning": True, "waiting_for_balance": False
         }
     return user_states[uid]
 
@@ -41,7 +42,7 @@ def get_neighbors(n, s=2):
     idx = WHEEL_MAP[n]
     return [WHEEL[(idx + i) % 37] for i in range(-s, s + 1)]
 
-def smart_engine_v5(uid):
+def smart_engine_v6(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
     last_num = hist[-1]
@@ -69,7 +70,7 @@ def smart_engine_v5(uid):
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_targets):
             main_targets.append(cand_num)
 
-    extra_targets = [last_num] # Kural: İlk sayı son gelenin tekrarı
+    extra_targets = [last_num] # Extra ilk sayı her zaman tekrardır.
     for cand_num, _ in sorted_sc:
         if len(extra_targets) >= 3: break 
         if cand_num not in main_targets and cand_num not in extra_targets:
@@ -77,9 +78,8 @@ def smart_engine_v5(uid):
 
     sector_counts = {"Voisins": 0, "Orphelins": 0, "Tiers": 0}
     for n in hist[-10:]:
-        for sector, nums in SECTORS.items():
-            if n in nums: sector_counts[sector] += 1
-    
+        for s, nums in SECTORS.items():
+            if n in nums: sector_counts[s] += 1
     hot_sector = max(sector_counts, key=sector_counts.get)
     
     prob_targets = []
@@ -94,7 +94,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("⚖️ AI HYBRID V5 - KAZANÇ TAKİBİ AKTİF\nIsınma: İlk 10 sayıyı girin.", 
+    await update.message.reply_text("⚖️ AI V6 - %30 KASA YÖNETİMİ\nIsınma: İlk 10 sayıyı girin.", 
                                    reply_markup=ReplyKeyboardMarkup([['/reset']], resize_keyboard=True))
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -113,7 +113,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state["waiting_for_balance"]:
         state["bakiye"] = val
         state["waiting_for_balance"] = False
-        await update.message.reply_text(f"💰 Başlangıç Kasası: {val} TL. Bol şans!"); return
+        await update.message.reply_text(f"💰 Kasa: {val} TL. %30 risk kuralı aktif."); return
 
     if state["is_learning"]:
         state["history"].append(val)
@@ -123,35 +123,37 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state["is_learning"] = False; state["waiting_for_balance"] = True
             await update.message.reply_text("✅ Isınma Bitti. Bakiyenizi girin:"); return
 
-    # Bahis Sonuçlandırma ve Kazanç Ekranı
+    # Bahis Sonuçlandırma
     all_bets = list(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
-    if all_bets:
-        bet_cost = len(all_bets) * 10
+    if all_bets and state["last_unit"] > 0:
+        bet_cost = len(all_bets) * state["last_unit"]
         state["bakiye"] -= bet_cost
-        
         if val in all_bets:
-            win_amount = 360
-            net_profit = win_amount - bet_cost
-            state["bakiye"] += win_amount
-            result_msg = f"✅ KAZANDI!\n💵 Bahis: {bet_cost} TL\n💰 Net Kazanç: +{net_profit} TL"
+            win = state["last_unit"] * 36
+            state["bakiye"] += win
+            await update.message.reply_text(f"✅ KAZANDI!\n💵 Bahis: {bet_cost} TL\n💰 Net: +{win - bet_cost} TL")
         else:
-            result_msg = f"❌ KAYIP ({val})\n💵 Bahis: {bet_cost} TL"
-        
-        await update.message.reply_text(result_msg)
+            await update.message.reply_text(f"❌ KAYIP ({val})\n💵 Bahis: {bet_cost} TL")
 
     state["history"].append(val)
-    main_t, extra_t, prob_t, hot_zone = smart_engine_v5(uid)
+    main_t, extra_t, prob_t, hot_zone = smart_engine_v6(uid)
 
     m_b = set(); [m_b.update(get_neighbors(t, 2)) for t in main_t]
     e_b = set(); [e_b.update(get_neighbors(t, 2)) for t in extra_t]
     p_b = set(); [p_b.update(get_neighbors(t, 2)) for t in prob_t]
 
     state["last_main_bets"], state["last_extra_bets"], state["last_prob_bets"] = list(m_b), list(e_b), list(p_b)
+    
+    # %30 Kasa Hesabı
     total_nums = len(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
+    risk_limit = state["bakiye"] * 0.30
+    unit = math.floor(risk_limit / total_nums) if total_nums > 0 else 0
+    state["last_unit"] = max(unit, 1) # Minimum 1 TL bahis
 
     await update.message.reply_text(
-        f"💰 GÜNCEL KASA: {state['bakiye']} TL\n"
-        f"📝 Bir sonraki el maliyeti: {total_nums * 10} TL\n\n"
+        f"💰 KASA: {state['bakiye']} TL\n"
+        f"📢 BU EL: Sayı başı {state['last_unit']} TL basın.\n"
+        f"💸 Toplam Bahis: {total_nums * state['last_unit']} TL (%30)\n\n"
         f"🎯 MAIN: {main_t}\n"
         f"⚡ EXTRA: {extra_t}\n"
         f"🔥 OLASILIK ({hot_zone}): {prob_t}\n\n"
