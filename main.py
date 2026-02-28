@@ -7,6 +7,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = {5813833511, 1278793650}
 
+# Avrupa Ruleti Çark Dizilimi
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 
          5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 
@@ -16,11 +17,13 @@ user_states = {}
 def get_user_state(uid):
     if uid not in user_states:
         user_states[uid] = {
-            "bakiye": 0, "history": deque(maxlen=50), 
-            "last_bets": [], "loss_streak": 0, 
+            "bakiye": 0, 
+            "history": deque(maxlen=50), 
+            "last_bets": [], 
+            "loss_streak": 0, 
             "waiting_for_balance": True,
-            "forbidden_regions": deque(maxlen=2), # Yasaklı bölgeler hafızası
-            "last_region": None
+            "forbidden_regions": deque(maxlen=2), # Yasaklı bölgeler
+            "last_region": None # Son tahmin bölgesi
         }
     return user_states[uid]
 
@@ -34,7 +37,7 @@ def smart_engine(uid):
     loss_streak = state.get("loss_streak", 0)
     
     if len(hist) < 5:
-        return [0, 10, 20], "🌱 Isınma: Veri bekleniyor..."
+        return [0, 10, 20], "🌱 Isınma Modu: Veri toplanıyor..."
 
     # Bölge Tanımları
     regions = {
@@ -43,21 +46,23 @@ def smart_engine(uid):
         "O": [1, 20, 14, 31, 9, 17, 34, 6]
     }
 
-    # 1. İNAT KIRMA: Eğer 2 eldir aynı bölgeye oynayıp kaybettiysek, o bölgeyi yasakla
-    if loss_streak >= 2 and state["last_region"]:
-        state["forbidden_regions"].append(state["last_region"])
+    # 1. İNAT KIRMA: 2 el üst üste kaybedilen bölgeyi yasakla (KeyError düzeltildi)
+    current_last_region = state.get("last_region")
+    if loss_streak >= 2 and current_last_region:
+        if current_last_region not in state["forbidden_regions"]:
+            state["forbidden_regions"].append(current_last_region)
 
-    # 2. HIZLI ANALİZ (Son 7 sayıya göre ağırlık)
+    # 2. ANALİZ: Son 7 sayıya göre +1 kaydırmalı ağırlık
     scores = {num: 0 for num in range(37)}
     for i, n in enumerate(reversed(hist[-7:])):
         weight = 100 / (1.2**i)
         idx = WHEEL_MAP[n]
-        # Hafif ileri kaydırma (Zamanlama hatasını önlemek için +1 kaydırır)
+        # Zamanlama hatasını önlemek için tahminleri +1 kaydır
         corrected_idx = (idx + 1) % 37 
         for d in [-2, -1, 0, 1, 2]:
             scores[WHEEL[(corrected_idx + d) % 37]] += weight
 
-    # 3. YASAKLI BÖLGE KONTROLÜ
+    # 3. YASAKLI BÖLGE FİLTRESİ
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     targets = []
     
@@ -72,19 +77,25 @@ def smart_engine(uid):
             targets.append(cand_num)
             state["last_region"] = cand_region
 
-    # Eğer yasaklardan dolayı hedef bulunamadıysa zıt tarafa oyna
+    # Yedek Plan: Yasaklardan dolayı hedef kalmazsa çarkın zıt tarafına bak
     if not targets:
-        targets = [WHEEL[(WHEEL_MAP[hist[-1]] + 18) % 37], 0, 10]
+        last_idx = WHEEL_MAP[hist[-1]]
+        targets = [WHEEL[(last_idx + 18) % 37], WHEEL[(last_idx + 10) % 37], 0]
         state["last_region"] = "ZIT"
 
-    msg = f"🔄 Dinamik Mod: {'Yasaklı bölge atlandı' if state['forbidden_regions'] else 'Akış takip ediliyor'}"
+    msg = f"🔄 Dinamik Analiz: {'Yasaklı bölge atlandı' if state['forbidden_regions'] else 'Akış takip ediliyor'}"
     return targets[:3], msg
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
-    user_states[uid] = {"bakiye": 0, "history": deque(maxlen=50), "last_bets": [], "loss_streak": 0, "waiting_for_balance": True, "forbidden_regions": deque(maxlen=2)}
-    await update.message.reply_text("⚖️ Sistem Güncellendi.\nArtık gelmeyen bölgeye inat etmez ve tahminleri +1 kaydırır.\nBakiyenizi girin:")
+    # State'i tamamen sıfırla
+    user_states[uid] = {
+        "bakiye": 0, "history": deque(maxlen=50), "last_bets": [], 
+        "loss_streak": 0, "waiting_for_balance": True, 
+        "forbidden_regions": deque(maxlen=2), "last_region": None
+    }
+    await update.message.reply_text("⚖️ Sistem Başlatıldı.\nİnat kırma ve zamanlama düzeltme aktif.\nBaşlangıç bakiyenizi girin:")
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -93,18 +104,28 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         text = update.message.text
+        
+        # Bakiye Girişi
         if state.get("waiting_for_balance"):
-            state["bakiye"] = int(text); state["waiting_for_balance"] = False
-            await update.message.reply_text(f"✅ Bakiye: {state['bakiye']} TL. İlk sayıyı girin."); return
+            try:
+                state["bakiye"] = int(text)
+                state["waiting_for_balance"] = False
+                await update.message.reply_text(f"✅ Bakiye {state['bakiye']} TL. İlk sayıyı girin.")
+            except ValueError:
+                await update.message.reply_text("Lütfen sadece rakam girin.")
+            return
 
         res = int(text)
         if not (0 <= res <= 36): raise ValueError
         
+        # Kazanç Değerlendirme
         if state["last_bets"]:
             cost = len(state["last_bets"]) * 10
             state["bakiye"] -= cost
             if res in state["last_bets"]:
-                state["bakiye"] += 360; state["loss_streak"] = 0; state["forbidden_regions"].clear()
+                state["bakiye"] += 360
+                state["loss_streak"] = 0
+                state["forbidden_regions"].clear()
                 msg = f"✅ KAZANDINIZ! (+{360-cost} TL)"
             else:
                 state["loss_streak"] += 1
@@ -114,18 +135,23 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state["history"].append(res)
         targets, d_msg = smart_engine(uid)
         
+        # Bahisleri Hesapla (3 Hedef + 2'şer Komşu)
         current_bets = set()
-        for t in targets: current_bets.update(get_neighbors(t, 2))
+        for t in targets:
+            current_bets.update(get_neighbors(t, 2))
+        
         state["last_bets"] = list(current_bets)
         
         await update.message.reply_text(
             f"{d_msg}\n"
-            f"🚫 Yasaklı Bölgeler: {list(state['forbidden_regions'])}\n"
-            f"💰 Bakiye: {state['bakiye']} TL\n"
-            f"🎯 Odaklar: {targets}"
+            f"🚫 Pas Geçilen Bölgeler: {list(state['forbidden_regions'])}\n"
+            f"💰 Güncel Bakiye: {state['bakiye']} TL\n"
+            f"🎯 Hedefler: {targets}\n"
+            f"🎲 Toplam: {len(state['last_bets'])} sayı"
         )
+        
     except ValueError:
-        await update.message.reply_text("0-36 arası sayı girin.")
+        await update.message.reply_text("Lütfen 0-36 arası bir sayı girin.")
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
