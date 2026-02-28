@@ -26,8 +26,7 @@ def get_user_state(uid):
     if uid not in user_states:
         user_states[uid] = {
             "bakiye": 0, "history": deque(maxlen=50), 
-            "ai_performance": deque(maxlen=10),
-            "last_main_bets": [], "last_extra_bets": [],
+            "last_main_bets": [], "last_extra_bets": [], "last_prob_bets": [],
             "is_learning": True, "waiting_for_balance": False
         }
     return user_states[uid]
@@ -36,14 +35,11 @@ def get_neighbors(n, s=2):
     idx = WHEEL_MAP[n]
     return [WHEEL[(idx + i) % 37] for i in range(-s, s + 1)]
 
-def smart_engine_v3(uid):
+def smart_engine_v4(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
     last_num = hist[-1]
     
-    perf_score = sum(state["ai_performance"]) / max(len(state["ai_performance"]), 1)
-    s_weight = 2.2 if perf_score > 0.6 else (1.1 if perf_score < 0.2 else 1.6)
-
     scores = {num: 0 for num in range(37)}
     jump_avg = 0
     if len(hist) >= 3:
@@ -53,36 +49,43 @@ def smart_engine_v3(uid):
 
     for i, n in enumerate(reversed(hist[-15:])):
         decay = 100 / (1.1**i)
-        predicted_idx = (WHEEL_MAP[n] + jump_avg) % 37
+        p_idx = (WHEEL_MAP[n] + jump_avg) % 37
         for d in [-3, -1, 0, 1, 3]:
-            num = WHEEL[(predicted_idx + d) % 37]
+            num = WHEEL[(p_idx + d) % 37]
             scores[num] += decay
-            if num in USER_STRATEGY_MAP.get(last_num, []): scores[num] *= s_weight
+            if num in USER_STRATEGY_MAP.get(last_num, []): scores[num] *= 1.8
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
-    # Main: 3 Sayı (Zorunlu 3)
+    # 🎯 MAIN: En güçlü 3 odak
     main_targets = []
     for cand_num, _ in sorted_sc:
         if len(main_targets) >= 3: break
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_targets):
             main_targets.append(cand_num)
 
-    # Extra: 3 Sayı (Son gelen + 2 yeni aday - Çakışma olsa bile 3'e tamamla)
+    # ⚡ EXTRA: Son gelen + 2 yeni
     extra_targets = [last_num]
     for cand_num, _ in sorted_sc:
         if len(extra_targets) >= 3: break 
         if cand_num not in main_targets and cand_num not in extra_targets:
             extra_targets.append(cand_num)
 
-    return main_targets, extra_targets
+    # 🔥 OLASILIK: En yoğun ortalamalı 2 çekirdek sayı
+    prob_targets = []
+    for cand_num, _ in sorted_sc:
+        if len(prob_targets) >= 2: break
+        if cand_num not in main_targets and cand_num not in extra_targets:
+            prob_targets.append(cand_num)
+
+    return main_targets, extra_targets, prob_targets
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    reply_markup = ReplyKeyboardMarkup([['/reset']], resize_keyboard=True)
-    await update.message.reply_text("🧠 AI ISINMA MODU AKTİF\nSistemin oturması için ilk 10 sayıyı girin (Kasa sormayacaktır):", reply_markup=reply_markup)
+    await update.message.reply_text("⚖️ AI HYBRID V4 - ANALİZ SİSTEMİ\nIsınma Modu: İlk 10 sayıyı girin.", 
+                                   reply_markup=ReplyKeyboardMarkup([['/reset']], resize_keyboard=True))
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -94,70 +97,48 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ADMIN_IDS: return
     state = get_user_state(uid)
     text = update.message.text.strip()
-
-    if not text.isdigit():
-        await update.message.reply_text("⚠️ Sadece sayı girin.")
-        return
+    if not text.isdigit(): return
     val = int(text)
 
-    # Bakiye Giriş Aşaması (Isınma bittiyse)
     if state["waiting_for_balance"]:
         state["bakiye"] = val
         state["waiting_for_balance"] = False
-        await update.message.reply_text(f"💰 Kasa: {val} TL ayarlandı. Tahminler başlıyor!")
-        return
+        await update.message.reply_text(f"💰 Kasa: {val} TL. Başlıyoruz!"); return
 
-    if val < 0 or val > 36:
-        await update.message.reply_text("⚠️ Geçersiz numara.")
-        return
-
-    # Isınma Kontrolü
     if state["is_learning"]:
         state["history"].append(val)
-        current_len = len(state["history"])
-        if current_len < 10:
-            await update.message.reply_text(f"📥 Veri Toplanıyor: {current_len}/10")
-            return
+        if len(state["history"]) < 10:
+            await update.message.reply_text(f"📥 Veri: {len(state['history'])}/10"); return
         else:
-            state["is_learning"] = False
-            state["waiting_for_balance"] = True
-            await update.message.reply_text("✅ Isınma tamamlandı! AI masayı analiz etti.\nŞimdi kasanızı (bakiyenizi) girin:")
-            return
+            state["is_learning"] = False; state["waiting_for_balance"] = True
+            await update.message.reply_text("✅ Analiz hazır. Bakiyenizi girin:"); return
 
-    # Oyun ve Kazanç Hesaplama (Isınma sonrası)
-    hit = 1 if (val in state["last_main_bets"] or val in state["last_extra_bets"]) else 0
-    state["ai_performance"].append(hit)
-
-    total_bets = list(set(state["last_main_bets"] + state["last_extra_bets"]))
-    if total_bets:
-        cost = len(total_bets) * 10
-        state["bakiye"] -= cost
-        if val in state["last_main_bets"]:
+    # Hesaplama
+    all_bets = list(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
+    if all_bets:
+        state["bakiye"] -= len(all_bets) * 10
+        if val in all_bets:
             state["bakiye"] += 360
-            await update.message.reply_text("✅ ANA HEDEF BİLDİ!")
-        elif val in state["last_extra_bets"]:
-            state["bakiye"] += 360
-            await update.message.reply_text("🔥 EKSTRA HEDEF BİLDİ!")
+            await update.message.reply_text("✅ KAZANDI!")
         else:
             await update.message.reply_text(f"❌ PAS ({val})")
 
     state["history"].append(val)
-    main_t, extra_t = smart_engine_v3(uid)
+    main_t, extra_t, prob_t = smart_engine_v4(uid)
 
-    # Bahis Grupları (2 Komşu Sabit)
-    m_bets = set()
-    for t in main_t: m_bets.update(get_neighbors(t, 2))
-    state["last_main_bets"] = list(m_bets)
+    # Bahisleri Hazırla (Hepsi 2 Komşu)
+    m_b = set(); [m_b.update(get_neighbors(t, 2)) for t in main_t]
+    e_b = set(); [e_b.update(get_neighbors(t, 2)) for t in extra_t]
+    p_b = set(); [p_b.update(get_neighbors(t, 2)) for t in prob_t]
 
-    e_bets = set()
-    for t in extra_t: e_bets.update(get_neighbors(t, 2))
-    state["last_extra_bets"] = list(e_bets)
+    state["last_main_bets"], state["last_extra_bets"], state["last_prob_bets"] = list(m_b), list(e_b), list(p_b)
 
     await update.message.reply_text(
         f"💰 Kasa: {state['bakiye']} TL\n\n"
         f"🎯 MAIN: {main_t}\n"
-        f"⚡ EXTRA: {extra_t}\n\n"
-        f"🎲 Toplam: {len(set(state['last_main_bets'] + state['last_extra_bets']))} sayı"
+        f"⚡ EXTRA: {extra_t}\n"
+        f"🔥 OLASILIK: {prob_t}\n\n"
+        f"🎲 Toplam: {len(set(state['last_main_bets'] + state['last_extra_bets'] + state['last_prob_bets']))} sayı"
     )
 
 if __name__ == '__main__':
