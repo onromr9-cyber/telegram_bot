@@ -40,28 +40,33 @@ def get_neighbors(n, s=1):
 def smart_engine_sniper(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
-    if not hist: return [0, 32, 15], [19, 4], [21]
+    if not hist: return [0, 32, 15], [19, 4], [21, 2]
+    
     last_num = hist[-1]
     scores = {num: 0 for num in range(37)}
     jump_avg = 0
+    
     if len(hist) >= 3:
         dist1 = (WHEEL_MAP[hist[-1]] - WHEEL_MAP[hist[-2]] + 37) % 37
         dist2 = (WHEEL_MAP[hist[-2]] - WHEEL_MAP[hist[-3]] + 37) % 37
-        jump_avg = int(((dist1 + dist2) / 2) * 1.05)
+        jump_avg = int(((dist1 + dist2) / 2))
 
     for i, n in enumerate(reversed(hist[-15:])):
-        decay = 100 / (1.15**i)
+        decay = 100 / (1.12**i) # Decay oranı hafifçe yumuşatıldı
         p_idx = (WHEEL_MAP[n] + jump_avg) % 37
         for d in [-1, 0, 1]:
             num = WHEEL[(p_idx + d) % 37]
             scores[num] += decay
-            if num in USER_STRATEGY_MAP.get(last_num, []): scores[num] *= 2.2
+            # --- ÇARPAN GÜNCELLENDİ (2.8) ---
+            if num in USER_STRATEGY_MAP.get(last_num, []): 
+                scores[num] *= 2.8
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
+    
     main_t = []
     for cand_num, _ in sorted_sc:
         if len(main_t) >= 3: break
-        if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 9 for t in main_t):
+        if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_t):
             main_t.append(cand_num)
     
     extra_t = [last_num] 
@@ -72,7 +77,7 @@ def smart_engine_sniper(uid):
 
     prob_t = []
     for cand_num, _ in sorted_sc:
-        if len(prob_t) >= 1: break
+        if len(prob_t) >= 2: break # Şans motoru 2 bölgeye çıkarıldı
         if cand_num not in main_t and cand_num not in extra_t:
             prob_t.append(cand_num)
             
@@ -83,9 +88,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
     reply_markup = ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True)
-    await update.message.reply_text("🎯 SNIPER V7.1 (%15 DENGELİ)\nSayıları girin, 5. sayıdan sonra kasa istenecek.", reply_markup=reply_markup)
+    await update.message.reply_text("🎯 SNIPER V7.1.5 (HATA DÜZELTİLDİ)\n%15 Kasa ve Güçlü Strateji Aktif.", reply_markup=reply_markup)
 
-# --- EKSİK OLAN FONKSİYON EKLENDİ ---
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid in user_states: del user_states[uid]
@@ -99,7 +103,7 @@ async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     last_snap = state["snapshot"].pop()
     state.update(last_snap)
     state["history"] = deque(last_snap["history"], maxlen=50)
-    await update.message.reply_text("↩️ Bir önceki tura dönüldü.")
+    await update.message.reply_text("↩️ Geri alındı.")
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -121,12 +125,8 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state["balance_set"] = True
         await update.message.reply_text(f"💰 Kasa {val} TL ayarlandı."); return
 
-    if val < 0 or val > 36:
-        await update.message.reply_text("⚠️ 0-36 arası girin!"); return
-
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
     state["snapshot"].append(snap)
-    if len(state["snapshot"]) > 10: state["snapshot"].pop(0)
 
     if state["balance_set"]:
         all_bets = list(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
@@ -151,22 +151,21 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_nums = len(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
     
     if state["balance_set"] and total_nums > 0:
-        # %15 HESAPLAMASI BURADA
         state["last_unit"] = max(math.floor((state["bakiye"] * 0.15) / total_nums), 1)
     else:
         state["last_unit"] = 0
 
     if len(state["history"]) == 5 and not state["balance_set"]:
         state["waiting_for_balance"] = True
-        await update.message.reply_text(f"🎯 ANALİZ: {m_t}\n⚠️ Lütfen kasanızı girin:")
+        await update.message.reply_text(f"🎯 ANALİZ: {m_t}\n⚠️ Kasanızı girin:")
         return
 
-    # Ekranda %15 bilgisini gösteren bölüm
     prefix = f"💰 KASA: {state['bakiye']} TL | 📢 Birim (%15): {state['last_unit']} TL\n" if state['balance_set'] else "📥 Isınma Analizi\n"
     await update.message.reply_text(
         f"{prefix}"
         f"🎯 MAIN: {m_t}\n"
         f"⚡ EXTRA: {e_t}\n"
+        f"🔥 ŞANS: {p_t}\n"
         f"🎲 Toplam: {total_nums} sayı"
     )
 
