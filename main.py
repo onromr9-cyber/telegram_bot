@@ -173,7 +173,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"💰 KASA: {state['bakiye']} TL | 📢 Birim: {state['last_unit']} TL\n"
         f"💸 Toplam Bahis: {total_nums * state['last_unit']} TL (%15)\n\n"
-        f"🎯 MAIN (Strateji Ağırlıklı): {main_t}\n"
+        f"🎯 MAIN : {main_t}\n"
         f"⚡ EXTRA : {extra_t}\n"
         f"🔥 ŞANS : {prob_t}\n\n"
         f"🎲 Toplam: {total_nums} sayı"
@@ -185,4 +185,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("reset", reset_bot))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
     app.run_polling()
+
 
