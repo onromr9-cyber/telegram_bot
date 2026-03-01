@@ -28,7 +28,8 @@ def get_user_state(uid):
         user_states[uid] = {
             "bakiye": 0, "history": deque(maxlen=50), "snapshot": [],
             "last_main_bets": [], "last_extra_bets": [], "last_prob_bets": [],
-            "last_unit": 0, "is_learning": True, "waiting_for_balance": False
+            "last_unit": 0, "is_learning": False, "waiting_for_balance": False,
+            "balance_set": False
         }
     return user_states[uid]
 
@@ -54,7 +55,7 @@ def smart_engine_sniper(uid):
         for d in [-1, 0, 1]:
             num = WHEEL[(p_idx + d) % 37]
             scores[num] += decay
-            if num in USER_STRATEGY_MAP.get(last_num, []): scores[num] *= 2.2 # Dengeli çarpan
+            if num in USER_STRATEGY_MAP.get(last_num, []): scores[num] *= 2.2
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     main_t = []
@@ -82,7 +83,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
     reply_markup = ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True)
-    await update.message.reply_text("🎯 SNIPER V7.1 (%15 KASA YÖNETİMİ)\nIsınma: İlk 10 sayıyı girin.", reply_markup=reply_markup)
+    await update.message.reply_text("🎯 SNIPER V7.1 (ANLIK ANALİZ AKTİF)\nSayıları girin, 5. sayıdan sonra kasa istenecek.", reply_markup=reply_markup)
 
 async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -108,36 +109,33 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     val = int(text)
 
+    # Kasa Giriş Ekranı
     if state["waiting_for_balance"]:
         state["bakiye"] = val
         state["waiting_for_balance"] = False
-        state["is_learning"] = False
-        await update.message.reply_text(f"💰 Kasa {val} TL ayarlandı."); return
+        state["balance_set"] = True
+        await update.message.reply_text(f"💰 Kasa {val} TL ayarlandı. Bahis takibi başladı!"); return
 
-    if state["is_learning"]:
-        state["history"].append(val)
-        if len(state["history"]) < 10:
-            await update.message.reply_text(f"📥 Isınma: {len(state['history'])}/10"); return
-        else:
-            state["waiting_for_balance"] = True
-            await update.message.reply_text("✅ Kasanızı girin:"); return
+    if val < 0 or val > 36:
+        await update.message.reply_text("⚠️ 0-36 arası girin!"); return
 
-    # Snapshot (Geri al için mevcut durumu kaydet)
+    # Kayıt
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
     state["snapshot"].append(snap)
     if len(state["snapshot"]) > 10: state["snapshot"].pop(0)
 
-    # %15 Bahis Hesaplama ve Bakiyeden Düşme
-    all_bets = list(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
-    if all_bets and state["last_unit"] > 0:
-        cost = len(all_bets) * state["last_unit"]
-        state["bakiye"] -= cost
-        if val in all_bets:
-            win = state["last_unit"] * 36
-            state["bakiye"] += win
-            await update.message.reply_text(f"✅ HİT! (+{win - cost} TL)")
-        else:
-            await update.message.reply_text(f"❌ PAS ({val}) | -{cost} TL")
+    # Kazanç Kontrolü (Sadece kasa girildiyse)
+    if state["balance_set"]:
+        all_bets = list(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
+        if all_bets and state["last_unit"] > 0:
+            cost = len(all_bets) * state["last_unit"]
+            state["bakiye"] -= cost
+            if val in all_bets:
+                win = state["last_unit"] * 36
+                state["bakiye"] += win
+                await update.message.reply_text(f"✅ HİT! (+{win - cost} TL)")
+            else:
+                await update.message.reply_text(f"❌ PAS ({val}) | -{cost} TL")
 
     state["history"].append(val)
     m_t, e_t, p_t = smart_engine_sniper(uid)
@@ -147,17 +145,24 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     p_b = set(); [p_b.update(get_neighbors(t, 1)) for t in p_t]
 
     state["last_main_bets"], state["last_extra_bets"], state["last_prob_bets"] = list(m_b), list(e_b), list(p_b)
-    
     total_nums = len(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
     
-    # %15 MANTIĞI BURADA:
-    if total_nums > 0:
+    # %15 Birim Hesaplama (Sadece kasa varsa)
+    if state["balance_set"] and total_nums > 0:
         state["last_unit"] = max(math.floor((state["bakiye"] * 0.15) / total_nums), 1)
     else:
         state["last_unit"] = 0
 
+    # 5. Sayı Geldiyse Kasa İste
+    if len(state["history"]) == 5 and not state["balance_set"]:
+        state["waiting_for_balance"] = True
+        await update.message.reply_text(f"✅ 5 Sayı Doldu.\n🎯 ANALİZ: {m_t}\n\n⚠️ Lütfen kasanızı girin:")
+        return
+
+    # Normal Analiz Mesajı
+    prefix = f"💰 KASA: {state['bakiye']} TL | 📢 Birim: {state['last_unit']} TL\n" if state['balance_set'] else "📥 Isınma Analizi (Kasa Henüz Girilmedi)\n"
     await update.message.reply_text(
-        f"💰 KASA: {state['bakiye']} TL | 📢 Birim: {state['last_unit']} TL\n"
+        f"{prefix}"
         f"🎯 MAIN: {m_t}\n"
         f"⚡ EXTRA: {e_t}\n"
         f"🎲 Toplam: {total_nums} sayı"
