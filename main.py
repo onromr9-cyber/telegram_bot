@@ -83,7 +83,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
     reply_markup = ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True)
-    await update.message.reply_text("🎯 SNIPER V7.1 (ANLIK ANALİZ AKTİF)\nSayıları girin, 5. sayıdan sonra kasa istenecek.", reply_markup=reply_markup)
+    await update.message.reply_text("🎯 SNIPER V7.1 (%15 DENGELİ)\nSayıları girin, 5. sayıdan sonra kasa istenecek.", reply_markup=reply_markup)
+
+# --- EKSİK OLAN FONKSİYON EKLENDİ ---
+async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid in user_states: del user_states[uid]
+    await start(update, context)
 
 async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -109,22 +115,19 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     val = int(text)
 
-    # Kasa Giriş Ekranı
     if state["waiting_for_balance"]:
         state["bakiye"] = val
         state["waiting_for_balance"] = False
         state["balance_set"] = True
-        await update.message.reply_text(f"💰 Kasa {val} TL ayarlandı. Bahis takibi başladı!"); return
+        await update.message.reply_text(f"💰 Kasa {val} TL ayarlandı."); return
 
     if val < 0 or val > 36:
         await update.message.reply_text("⚠️ 0-36 arası girin!"); return
 
-    # Kayıt
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
     state["snapshot"].append(snap)
     if len(state["snapshot"]) > 10: state["snapshot"].pop(0)
 
-    # Kazanç Kontrolü (Sadece kasa girildiyse)
     if state["balance_set"]:
         all_bets = list(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
         if all_bets and state["last_unit"] > 0:
@@ -147,20 +150,19 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state["last_main_bets"], state["last_extra_bets"], state["last_prob_bets"] = list(m_b), list(e_b), list(p_b)
     total_nums = len(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
     
-    # %15 Birim Hesaplama (Sadece kasa varsa)
     if state["balance_set"] and total_nums > 0:
+        # %15 HESAPLAMASI BURADA
         state["last_unit"] = max(math.floor((state["bakiye"] * 0.15) / total_nums), 1)
     else:
         state["last_unit"] = 0
 
-    # 5. Sayı Geldiyse Kasa İste
     if len(state["history"]) == 5 and not state["balance_set"]:
         state["waiting_for_balance"] = True
-        await update.message.reply_text(f"✅ 5 Sayı Doldu.\n🎯 ANALİZ: {m_t}\n\n⚠️ Lütfen kasanızı girin:")
+        await update.message.reply_text(f"🎯 ANALİZ: {m_t}\n⚠️ Lütfen kasanızı girin:")
         return
 
-    # Normal Analiz Mesajı
-    prefix = f"💰 KASA: {state['bakiye']} TL | 📢 Birim: {state['last_unit']} TL\n" if state['balance_set'] else "📥 Isınma Analizi (Kasa Henüz Girilmedi)\n"
+    # Ekranda %15 bilgisini gösteren bölüm
+    prefix = f"💰 KASA: {state['bakiye']} TL | 📢 Birim (%15): {state['last_unit']} TL\n" if state['balance_set'] else "📥 Isınma Analizi\n"
     await update.message.reply_text(
         f"{prefix}"
         f"🎯 MAIN: {m_t}\n"
