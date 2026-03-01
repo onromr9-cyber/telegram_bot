@@ -40,47 +40,45 @@ def get_neighbors(n, s=1):
 def smart_engine_sniper(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
-    if not hist: return [0, 32, 15], [19, 4], [21, 2]
+    if not hist: return [0, 32, 15], [19, 4], [21]
     
     last_num = hist[-1]
     scores = {num: 0 for num in range(37)}
     
-    # Geniş Düşünme: Sadece son farka değil, son 5 eldeki "ritme" bak
+    # Keskin Jump: Son 2 eldeki taze mesafe
     jump_avg = 0
-    if len(hist) >= 5:
-        dists = [(WHEEL_MAP[hist[i]] - WHEEL_MAP[hist[i-1]] + 37) % 37 for i in range(-1, -4, -1)]
-        jump_avg = int(sum(dists) / len(dists))
+    if len(hist) >= 2:
+        jump_avg = (WHEEL_MAP[hist[-1]] - WHEEL_MAP[hist[-2]] + 37) % 37
 
-    for i, n in enumerate(reversed(hist[-20:])): # Daha geniş geçmiş (20 el)
-        decay = 100 / (1.10**i) # Geçmişin etkisi daha yavaş azalır (Geniş hafıza)
+    for i, n in enumerate(reversed(hist[-12:])): # Taze hafıza
+        decay = 100 / (1.20**i)
         p_idx = (WHEEL_MAP[n] + jump_avg) % 37
-        for d in range(-2, 3): # Etki alanını genişlet (+-2)
+        for d in [-1, 0, 1]: # Dar etki alanı
             num = WHEEL[(p_idx + d) % 37]
             scores[num] += decay
-            # Strateji Referansı (Referans al ama hapsolma)
+            # --- STRATEJİYE TAM SADAKAT (3.5) ---
             if num in USER_STRATEGY_MAP.get(last_num, []): 
-                scores[num] *= 2.5 
+                scores[num] *= 3.5
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
-    # Hedef Belirleme
     main_t = []
     for cand_num, _ in sorted_sc:
         if len(main_t) >= 3: break
-        # Sayılar birbirine çok yakınsa (kümelenme) genişlet
-        if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 6 for t in main_t):
+        if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 8 for t in main_t):
             main_t.append(cand_num)
     
     extra_t = [last_num]
     for cand_num, _ in sorted_sc:
-        if len(extra_t) >= 3: break # Ekstra kapasitesi artırıldı
+        if len(extra_t) >= 2: break
         if cand_num not in main_t and cand_num != last_num:
             extra_t.append(cand_num)
 
-    prob_t = []
-    for cand_num, sc in reversed(sorted_sc[-10:]): # En az gelen "soğuk" ama gelmesi yakın bölgeler
-        if len(prob_t) >= 2: break
-        prob_t.append(cand_num)
+    prob_t = [] # ŞANS motorunu tekrar tek ve en güçlü rakama indirdik
+    for cand_num, _ in sorted_sc:
+        if len(prob_t) >= 1: break
+        if cand_num not in main_t and cand_num not in extra_t:
+            prob_t.append(cand_num)
             
     return main_t, extra_t, prob_t
 
@@ -89,7 +87,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
     reply_markup = ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True)
-    await update.message.reply_text("🎯 SNIPER V7.1.6 (GENİŞ VİZYON)\nAnaliz her turda, kasa girişi 5. turda.", reply_markup=reply_markup)
+    await update.message.reply_text("🎯 SNIPER V7.1.7 (HARD MODE)\nSayıları girin, 5. turda kasa girişi.", reply_markup=reply_markup)
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -143,6 +141,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state["history"].append(val)
     m_t, e_t, p_t = smart_engine_sniper(uid)
 
+    # Daraltılmış Komşu Alanları
     m_b = set(); [m_b.update(get_neighbors(t, 2)) for t in m_t]
     e_b = set(); [e_b.update(get_neighbors(t, 1)) for t in e_t]
     p_b = set(); [p_b.update(get_neighbors(t, 1)) for t in p_t]
