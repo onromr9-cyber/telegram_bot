@@ -60,7 +60,7 @@ def smart_engine_sniper(uid):
             # --- STRATEJİ ODAKLI GÜNCELLEME ---
             # Listendeki sayıya çok güçlü odaklan (x5.5 çarpan)
             if num in USER_STRATEGY_MAP.get(last_num, []): 
-                scores[num] *= 5.5  
+                scores[num] *= 3.2  
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
@@ -185,3 +185,4 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("reset", reset_bot))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
     app.run_polling()
+
