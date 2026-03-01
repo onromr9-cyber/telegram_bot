@@ -56,7 +56,11 @@ def smart_engine_sniper(uid):
         for d in [-1, 0, 1]:
             num = WHEEL[(p_idx + d) % 37]
             scores[num] += decay
-            if num in USER_STRATEGY_MAP.get(last_num, []): scores[num] *= 2.2
+            
+            # --- STRATEJİ ODAKLI GÜNCELLEME ---
+            # Listendeki sayıya çok güçlü odaklan (x5.5 çarpan)
+            if num in USER_STRATEGY_MAP.get(last_num, []): 
+                scores[num] *= 5.5  
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
@@ -85,7 +89,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
     reply_markup = ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True)
-    await update.message.reply_text("🎯 SNIPER V7.1 AKTİF\nIsınma: İlk 10 sayıyı girin.", reply_markup=reply_markup)
+    await update.message.reply_text("🎯 SNIPER V7.2 (STRATEJİ ODAKLI)\nIsınma: İlk 10 sayıyı girin.", reply_markup=reply_markup)
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -136,12 +140,10 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if val < 0 or val > 36:
         await update.message.reply_text("⚠️ Hata: 0-36 arası sayı girin!"); return
 
-    # Snapshot Kaydı (Geri alma için)
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
     state["snapshot"].append(snap)
     if len(state["snapshot"]) > 10: state["snapshot"].pop(0)
 
-    # Bahis Hesaplama
     all_bets = list(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
     if all_bets and state["last_unit"] > 0:
         cost = len(all_bets) * state["last_unit"]
@@ -171,7 +173,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"💰 KASA: {state['bakiye']} TL | 📢 Birim: {state['last_unit']} TL\n"
         f"💸 Toplam Bahis: {total_nums * state['last_unit']} TL (%15)\n\n"
-        f"🎯 MAIN : {main_t}\n"
+        f"🎯 MAIN (Strateji Ağırlıklı): {main_t}\n"
         f"⚡ EXTRA : {extra_t}\n"
         f"🔥 ŞANS : {prob_t}\n\n"
         f"🎲 Toplam: {total_nums} sayı"
