@@ -57,16 +57,16 @@ def smart_engine_sniper(uid):
             num = WHEEL[(p_idx + d) % 37]
             scores[num] += decay
             
-            # --- STRATEJİ ODAKLI GÜNCELLEME ---
-            # Listendeki sayıya çok güçlü odaklan (x5.5 çarpan)
+            # --- ANALİZ SONUCU GÜNCELLENEN ÇARPAN (4.2) ---
             if num in USER_STRATEGY_MAP.get(last_num, []): 
-                scores[num] *= 3.2  
+                scores[num] *= 4.2  
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
     main_targets = []
     for cand_num, _ in sorted_sc:
         if len(main_targets) >= 3: break
+        # Sayıların çark üzerinde birbirinden uzak olmasını sağlar
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 9 for t in main_targets):
             main_targets.append(cand_num)
 
@@ -89,7 +89,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
     reply_markup = ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True)
-    await update.message.reply_text("🎯 SNIPER V7.2 (STRATEJİ ODAKLI)\nIsınma: İlk 10 sayıyı girin.", reply_markup=reply_markup)
+    await update.message.reply_text("🎯 SNIPER V7.3 (OPTIMIZED)\nIsınma: İlk 10 sayıyı girin.", reply_markup=reply_markup)
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -118,7 +118,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not text.isdigit():
-        await update.message.reply_text("⚠️ Lütfen geçerli bir sayı giriniz!")
+        await update.message.reply_text("⚠️ Lütfen sayı girin!")
         return
     
     val = int(text)
@@ -127,7 +127,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state["bakiye"] = val
         state["waiting_for_balance"] = False
         state["is_learning"] = False
-        await update.message.reply_text(f"💰 Kasa {val} TL olarak ayarlandı. Sniper moduna geçildi!"); return
+        await update.message.reply_text(f"💰 Kasa {val} TL olarak ayarlandı!"); return
 
     if state["is_learning"]:
         state["history"].append(val)
@@ -135,15 +135,17 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"📥 Isınma: {len(state['history'])}/10"); return
         else:
             state["waiting_for_balance"] = True
-            await update.message.reply_text("✅ Isınma bitti. Lütfen kasanızı girin:"); return
+            await update.message.reply_text("✅ Isınma bitti. Kasanızı girin:"); return
 
     if val < 0 or val > 36:
-        await update.message.reply_text("⚠️ Hata: 0-36 arası sayı girin!"); return
+        await update.message.reply_text("⚠️ 0-36 arası girin!"); return
 
+    # Snapshot (Geri alma kapasitesi 20'ye çıkarıldı)
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
     state["snapshot"].append(snap)
-    if len(state["snapshot"]) > 10: state["snapshot"].pop(0)
+    if len(state["snapshot"]) > 20: state["snapshot"].pop(0)
 
+    # Kazanç/Kayıp Hesabı
     all_bets = list(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
     if all_bets and state["last_unit"] > 0:
         cost = len(all_bets) * state["last_unit"]
@@ -172,10 +174,8 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"💰 KASA: {state['bakiye']} TL | 📢 Birim: {state['last_unit']} TL\n"
-        f"💸 Toplam Bahis: {total_nums * state['last_unit']} TL (%15)\n\n"
         f"🎯 MAIN : {main_t}\n"
         f"⚡ EXTRA : {extra_t}\n"
-        f"🔥 ŞANS : {prob_t}\n\n"
         f"🎲 Toplam: {total_nums} sayı"
     )
 
@@ -185,5 +185,3 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("reset", reset_bot))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
     app.run_polling()
-
-
