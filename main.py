@@ -8,7 +8,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = {5813833511, 1278793650}
 
-# Listelerdeki görünmez karakterler temizlendi
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
 
@@ -41,11 +40,9 @@ def smart_engine_sniper(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
     if not hist: return [0, 32, 15], [19, 4], [21]
-    
     last_num = hist[-1]
     scores = {num: 0 for num in range(37)}
     jump_avg = 0
-    
     if len(hist) >= 3:
         dist1 = (WHEEL_MAP[hist[-1]] - WHEEL_MAP[hist[-2]] + 37) % 37
         dist2 = (WHEEL_MAP[hist[-2]] - WHEEL_MAP[hist[-3]] + 37) % 37
@@ -57,67 +54,57 @@ def smart_engine_sniper(uid):
         for d in [-1, 0, 1]:
             num = WHEEL[(p_idx + d) % 37]
             scores[num] += decay
-            if num in USER_STRATEGY_MAP.get(last_num, []): scores[num] *= 2.2
+            if num in USER_STRATEGY_MAP.get(last_num, []): scores[num] *= 2.2 # Dengeli çarpan
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
+    main_t = []
+    for cand_num, _ in sorted_sc:
+        if len(main_t) >= 3: break
+        if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 9 for t in main_t):
+            main_t.append(cand_num)
     
-    main_targets = []
+    extra_t = [last_num] 
     for cand_num, _ in sorted_sc:
-        if len(main_targets) >= 3: break
-        if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 9 for t in main_targets):
-            main_targets.append(cand_num)
+        if len(extra_t) >= 2: break
+        if cand_num not in main_t and cand_num != last_num:
+            extra_t.append(cand_num)
 
-    extra_targets = [last_num] 
+    prob_t = []
     for cand_num, _ in sorted_sc:
-        if len(extra_targets) >= 2: break
-        if cand_num not in main_targets and cand_num != last_num:
-            extra_targets.append(cand_num)
-
-    prob_targets = []
-    for cand_num, _ in sorted_sc:
-        if len(prob_targets) >= 1: break
-        if cand_num not in main_targets and cand_num not in extra_targets:
-            prob_targets.append(cand_num)
+        if len(prob_t) >= 1: break
+        if cand_num not in main_t and cand_num not in extra_t:
+            prob_t.append(cand_num)
             
-    return main_targets, extra_targets, prob_targets
+    return main_t, extra_t, prob_t
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    # Buton metni play fonksiyonu ile senkronize edildi
     reply_markup = ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True)
-    await update.message.reply_text("🎯 SNIPER V7.1 AKTİF\nIsınma: İlk 10 sayıyı girin.", reply_markup=reply_markup)
-
-async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if uid in user_states: del user_states[uid]
-    await start(update, context)
+    await update.message.reply_text("🎯 SNIPER V7.1 (%15 KASA YÖNETİMİ)\nIsınma: İlk 10 sayıyı girin.", reply_markup=reply_markup)
 
 async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     state = get_user_state(uid)
     if not state["snapshot"]:
-        await update.message.reply_text("⚠️ Geri alınacak hamle yok.")
-        return
+        await update.message.reply_text("⚠️ Geri alınacak hamle yok."); return
     last_snap = state["snapshot"].pop()
     state.update(last_snap)
     state["history"] = deque(last_snap["history"], maxlen=50)
-    await update.message.reply_text("↩️ Son hamle geri alındı.")
+    await update.message.reply_text("↩️ Bir önceki tura dönüldü.")
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     state = get_user_state(uid)
-    text = update.message.text.strip().upper() # Büyük harfe zorla
+    text = update.message.text.strip().upper()
 
     if text == '↩️ GERİ AL':
-        await undo(update, context)
-        return
+        await undo(update, context); return
 
     if not text.isdigit():
-        await update.message.reply_text("⚠️ Lütfen geçerli bir sayı giriniz!")
-        return
+        await update.message.reply_text("⚠️ Sayı girin!"); return
     
     val = int(text)
 
@@ -125,7 +112,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state["bakiye"] = val
         state["waiting_for_balance"] = False
         state["is_learning"] = False
-        await update.message.reply_text(f"💰 Kasa {val} TL ayarlandı. Başarılar!"); return
+        await update.message.reply_text(f"💰 Kasa {val} TL ayarlandı."); return
 
     if state["is_learning"]:
         state["history"].append(val)
@@ -133,17 +120,14 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"📥 Isınma: {len(state['history'])}/10"); return
         else:
             state["waiting_for_balance"] = True
-            await update.message.reply_text("✅ Isınma bitti. Lütfen kasanızı girin:"); return
+            await update.message.reply_text("✅ Kasanızı girin:"); return
 
-    if val < 0 or val > 36:
-        await update.message.reply_text("⚠️ Hata: 0-36 arası sayı girin!"); return
-
-    # Snapshot Kaydı (Bakiye düşmeden önce alınmalı)
+    # Snapshot (Geri al için mevcut durumu kaydet)
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
     state["snapshot"].append(snap)
     if len(state["snapshot"]) > 10: state["snapshot"].pop(0)
 
-    # Bahis Sonuçlandırma
+    # %15 Bahis Hesaplama ve Bakiyeden Düşme
     all_bets = list(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
     if all_bets and state["last_unit"] > 0:
         cost = len(all_bets) * state["last_unit"]
@@ -155,19 +139,18 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(f"❌ PAS ({val}) | -{cost} TL")
 
-    # Yeni sayıyı ekle ve motoru çalıştır
     state["history"].append(val)
-    main_t, extra_t, prob_t = smart_engine_sniper(uid)
+    m_t, e_t, p_t = smart_engine_sniper(uid)
 
-    # Komşuluk hesaplama
-    m_b = set(); [m_b.update(get_neighbors(t, 2)) for t in main_t]
-    e_b = set(); [e_b.update(get_neighbors(t, 1)) for t in extra_t]
-    p_b = set(); [p_b.update(get_neighbors(t, 1)) for t in prob_t]
+    m_b = set(); [m_b.update(get_neighbors(t, 2)) for t in m_t]
+    e_b = set(); [e_b.update(get_neighbors(t, 1)) for t in e_t]
+    p_b = set(); [p_b.update(get_neighbors(t, 1)) for t in p_t]
 
     state["last_main_bets"], state["last_extra_bets"], state["last_prob_bets"] = list(m_b), list(e_b), list(p_b)
     
     total_nums = len(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
-    # Sıfıra bölme hatası için kontrol
+    
+    # %15 MANTIĞI BURADA:
     if total_nums > 0:
         state["last_unit"] = max(math.floor((state["bakiye"] * 0.15) / total_nums), 1)
     else:
@@ -175,9 +158,8 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"💰 KASA: {state['bakiye']} TL | 📢 Birim: {state['last_unit']} TL\n"
-        f"🎯 MAIN : {main_t}\n"
-        f"⚡ EXTRA : {extra_t}\n"
-        f"🔥 ŞANS : {prob_t}\n\n"
+        f"🎯 MAIN: {m_t}\n"
+        f"⚡ EXTRA: {e_t}\n"
         f"🎲 Toplam: {total_nums} sayı"
     )
 
