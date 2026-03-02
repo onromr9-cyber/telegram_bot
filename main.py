@@ -74,19 +74,20 @@ def smart_engine_sector_aware(uid):
             if num in USER_STRATEGY_MAP.get(hist[-1], []): scores[num] *= 2.0
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
+    
+    # MAIN
     main_t = []
     for cand_num, _ in sorted_sc:
         if len(main_t) >= 3: break
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_t): main_t.append(cand_num)
     
-    counts = collections.Counter(hist[-10:])
-    repeats = [num for num, count in counts.items() if count > 1]
-    extra_t = []
-    if repeats: extra_t.append(repeats[-1])
+    # EXTRA (İsteğine göre: İlk sayı mutlaka son geleni tekrar eder)
+    extra_t = [hist[-1]]
     for cand_num, _ in sorted_sc:
         if len(extra_t) >= 2: break
         if cand_num not in main_t and cand_num not in extra_t: extra_t.append(cand_num)
 
+    # ŞANS
     prob_t = []
     for cand_num, _ in reversed(sorted_sc):
         if len(prob_t) >= 1: break
@@ -98,7 +99,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ GUARDIAN v2.6\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
+    await update.message.reply_text("🛡️ GUARDIAN v2.7\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -134,7 +135,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state["is_warmup_done"]:
         if val in state["last_all_bets"]:
-            state["bakiye"] += state["last_unit"] * 36
+            state["bakiye"] += (state["last_unit"] * 36) - (len(state["last_all_bets"]) * state["last_unit"])
             state["hit_history"].append(1)
             state["fail_count"] = 0
             await update.message.reply_text(f"✅ HİT! ({get_sector(val)})")
@@ -166,18 +167,15 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     all_bets = list(m_b | e_b | p_b)
     state["last_all_bets"] = all_bets
-    
-    # %15 Stratejisi ve Birim Hesaplama
     risk_miktari = state["bakiye"] * 0.15
     state["last_unit"] = max(math.floor(risk_miktari / len(all_bets)), 1) if state["bakiye"] > 0 else 0
 
     msg = (
         f"🧭 {state['current_sector']}\n"
         f"💰 KASA: {state['bakiye']} | 🪙 BET: {state['last_unit']}\n\n"
-        f"🎯 MAIN (5-2-5): {m_t}\n"
-        f"⚡ EXTRA (3-1-3): {e_t}\n"
-        f"🔥 ŞANS: {p_t}\n\n"
-        f"📊 Toplam Bahis: {len(all_bets)} Sayı"
+        f"🎯 MAIN: {m_t}\n"
+        f"⚡ EXTRA: {e_t}\n"
+        f"🔥 ŞANS: {p_t}"
     )
     await update.message.reply_text(msg)
 
