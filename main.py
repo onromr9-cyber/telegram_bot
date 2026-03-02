@@ -9,11 +9,9 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TOKEN = os.getenv("BOT_TOKEN") 
 ADMIN_IDS = {5813833511, 1278793650}
 
-# Çark ve Sektör Tanımlamaları
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
 
-# Sektör Grupları
 VOISINS = {22, 18, 29, 7, 28, 12, 35, 3, 26, 0, 32, 15, 19, 4, 21, 2, 25}
 TIER = {27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33}
 ORPHELINS = {1, 20, 14, 31, 9, 17, 34, 6}
@@ -33,9 +31,10 @@ user_states = {}
 def get_user_state(uid):
     if uid not in user_states:
         user_states[uid] = {
-            "history": deque(maxlen=60), "hit_history": deque(maxlen=5), 
-            "is_locked": False, "snapshot": [], "last_all_bets": [],
-            "fail_count": 0, "is_warmup_done": False, "current_sector": "Bilinmiyor"
+            "bakiye": 0, "ath_bakiye": 0, "history": deque(maxlen=60), 
+            "hit_history": deque(maxlen=5), "is_locked": False, "snapshot": [],
+            "last_all_bets": [], "fail_count": 0, "is_warmup_done": False, 
+            "waiting_for_balance": False, "last_unit": 0, "current_sector": "N/A"
         }
     return user_states[uid]
 
@@ -43,7 +42,7 @@ def get_sector(n):
     if n in VOISINS: return "VOISINS"
     if n in TIER: return "TIER"
     if n in ORPHELINS: return "ORPHELINS"
-    return "Bilinmiyor"
+    return "N/A"
 
 def get_neighbors(n, s=1):
     idx = WHEEL_MAP[n]
@@ -71,45 +70,35 @@ def smart_engine_sector_aware(uid):
         for d in [-1, 0, 1]:
             num = WHEEL[(p_idx + d) % 37]
             scores[num] += decay
-            # SEKTÖR FARKINDALIĞI: Baskın sektördeki sayılara ek puan
-            if get_sector(num) == dominant_sector:
-                scores[num] *= 1.5
-            if num in USER_STRATEGY_MAP.get(hist[-1], []):
-                scores[num] *= 2.0
+            if get_sector(num) == dominant_sector: scores[num] *= 1.5
+            if num in USER_STRATEGY_MAP.get(hist[-1], []): scores[num] *= 2.0
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
-    
     main_t = []
     for cand_num, _ in sorted_sc:
         if len(main_t) >= 3: break
-        if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_t):
-            main_t.append(cand_num)
+        if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_t): main_t.append(cand_num)
     
     counts = collections.Counter(hist[-10:])
     repeats = [num for num, count in counts.items() if count > 1]
     extra_t = []
-    if repeats: extra_t.append(repeats[-1]) # Repeat Kuralı
-    
+    if repeats: extra_t.append(repeats[-1])
     for cand_num, _ in sorted_sc:
         if len(extra_t) >= 2: break
-        if cand_num not in main_t and cand_num not in extra_t:
-            extra_t.append(cand_num)
+        if cand_num not in main_t and cand_num not in extra_t: extra_t.append(cand_num)
 
     prob_t = []
     for cand_num, _ in reversed(sorted_sc):
         if len(prob_t) >= 1: break
-        if cand_num not in main_t and cand_num not in extra_t:
-            prob_t.append(cand_num)
+        if cand_num not in main_t and cand_num not in extra_t: prob_t.append(cand_num)
             
     return main_t, extra_t, prob_t
 
-# --- BOT HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    reply_markup = ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True)
-    await update.message.reply_text("🛡️ GUARDIAN v2.3: SECTOR AWARENESS AKTİF\nZeka güncellendi. 10 sayı girin.", reply_markup=reply_markup)
+    await update.message.reply_text("🛡️ GUARDIAN v2.4\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -122,64 +111,75 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_user_state(uid)
     
     if state["is_locked"]:
-        await update.message.reply_text("🚨 LÜTFEN KALK! Kasa koruma kilitlendi.\n/reset ile yeni masaya geç.")
+        await update.message.reply_text("🚨 LÜTFEN KALK!\n/reset yazın.")
         return
 
     text = update.message.text.strip().upper()
     if text == '↩️ GERİ AL':
         if state["snapshot"]: state.update(state["snapshot"].pop())
-        await update.message.reply_text("↩️ İşlem geri alındı.")
+        await update.message.reply_text("↩️ Geri alındı.")
         return
     if not text.isdigit(): return
 
     val = int(text)
+
+    # KASA GİRİŞ MANTIĞI
+    if state["waiting_for_balance"]:
+        state["bakiye"] = val
+        state["ath_bakiye"] = val
+        state["waiting_for_balance"] = False
+        state["is_warmup_done"] = True
+        await update.message.reply_text(f"💰 KASA: {val} kaydedildi."); return
+
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
     state["snapshot"].append(snap)
 
     if state["is_warmup_done"]:
+        cost = len(state["last_all_bets"]) * state["last_unit"]
+        state["bakiye"] -= cost
         if val in state["last_all_bets"]:
+            state["bakiye"] += state["last_unit"] * 36
             state["hit_history"].append(1)
             state["fail_count"] = 0
             await update.message.reply_text(f"✅ HİT! ({get_sector(val)})")
         else:
             state["hit_history"].append(0)
             state["fail_count"] += 1
-            await update.message.reply_text(f"❌ PAS ({val} - {get_sector(val)})")
+            await update.message.reply_text(f"❌ PAS ({val})")
 
+        if state["bakiye"] > state["ath_bakiye"]: state["ath_bakiye"] = state["bakiye"]
         hr = sum(state["hit_history"]) / 5 if len(state["hit_history"]) >= 5 else 1.0
+        
         if state["fail_count"] == 1:
-            await update.message.reply_text("⚠️ SARI ALARM: %25 Tolerans Eli!")
+            await update.message.reply_text("⚠️ SARI ALARM!")
         elif state["fail_count"] >= 2 or hr < 0.2:
             state["is_locked"] = True
-            await update.message.reply_text("🚨 LÜTFEN KALK! 🚨\nRitim ve Sektör dengesi bozuldu.")
-            return
+            await update.message.reply_text("🚨 LÜTFEN KALK! 🚨"); return
 
     state["history"].append(val)
-    if len(state["history"]) < 10:
-        await update.message.reply_text(f"📥 Isınma ({len(state['history'])}/10)")
-        return
-    state["is_warmup_done"] = True
+    if len(state["history"]) == 10 and not state["is_warmup_done"]:
+        state["waiting_for_balance"] = True
+        await update.message.reply_text("🎯 ISINMA TAMAM.\nKASA GİRİN:"); return
+    elif len(state["history"]) < 10:
+        await update.message.reply_text(f"📥 {len(state['history'])}/10"); return
 
     m_t, e_t, p_t = smart_engine_sector_aware(uid)
-    
-    # Komşu hesaplama
-    m_b = set(); [m_b.update(get_neighbors(t, 2)) for t in m_t]
-    e_b = set(); [e_b.update(get_neighbors(t, 1)) for t in e_t]
-    p_b = set(); [p_b.update(get_neighbors(t, 1)) for t in p_t]
+    m_b, e_b, p_b = set(), set(), set()
+    [m_b.update(get_neighbors(t, 2)) for t in m_t]
+    [e_b.update(get_neighbors(t, 1)) for t in e_t]
+    [p_b.update(get_neighbors(t, 1)) for t in p_t]
     
     state["last_all_bets"] = list(m_b | e_b | p_b)
+    state["last_unit"] = max(math.floor((state["bakiye"] * 0.15) / len(state["last_all_bets"])), 1) if state["bakiye"] > 0 else 0
 
     msg = (
-        f"🧭 BASKIN SEKTÖR: {state['current_sector']}\n\n"
+        f"🧭 {state['current_sector']}\n"
+        f"💰 KASA: {state['bakiye']}\n\n"
         f"🎯 MAIN: {m_t}\n"
-        f"⚡ EXTRA (Repeat): {e_t}\n"
+        f"⚡ EXTRA: {e_t}\n"
         f"🔥 ŞANS: {p_t}"
     )
     await update.message.reply_text(msg)
 
 if __name__ == '__main__':
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("reset", reset_bot))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
-    app.run_polling()
+    ApplicationBuilder().token(TOKEN).build().add_handler(CommandHandler("start", start)).add_handler(CommandHandler("reset", reset_bot)).add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play)).run_polling()
