@@ -51,7 +51,7 @@ def get_neighbors(n, s=1):
 def smart_engine_sector_aware(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
-    if not hist: return [0], [32], [15]
+    if not hist: return [0,32,15], [19,4], [21]
     
     last_5 = hist[-5:]
     sector_counts = collections.Counter([get_sector(n) for n in last_5])
@@ -79,7 +79,8 @@ def smart_engine_sector_aware(uid):
         if len(main_t) >= 3: break
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_t): main_t.append(cand_num)
     
-    extra_t = [hist[-1]] # İlk sayı repeat
+    # EXTRA: İlk sayı mutlaka son geleni (hist[-1]) tekrar eder
+    extra_t = [hist[-1]]
     for cand_num, _ in sorted_sc:
         if len(extra_t) >= 2: break
         if cand_num not in main_t and cand_num not in extra_t: extra_t.append(cand_num)
@@ -95,7 +96,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ GUARDIAN v2.8 (Patient Mode)\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
+    await update.message.reply_text("🛡️ GUARDIAN v2.9 (Ultra Sabır)\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -142,11 +143,11 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state["fail_count"] += 1
             await update.message.reply_text(f"❌ PAS ({val})")
 
-        hr = sum(state["hit_history"]) / 10 if len(state["hit_history"]) >= 10 else 1.0
-        # SABIRLI GÜVENLİK: 3 Pas sınırı ve 0.1 Hit Rate
-        if state["fail_count"] == 2:
-            await update.message.reply_text("⚠️ SARI ALARM! (Son Şans)")
-        elif state["fail_count"] >= 3 or (len(state["hit_history"]) >= 5 and hr < 0.1):
+        hr = sum(state["hit_history"]) / 10 if len(state["hit_history"]) >= 5 else 1.0
+        # ULTRA SABIR: 4 Hata sınırı
+        if state["fail_count"] == 3:
+            await update.message.reply_text("⚠️ SARI ALARM! (Son Hak)")
+        elif state["fail_count"] >= 4 or (len(state["hit_history"]) >= 8 and hr < 0.1):
             state["is_locked"] = True
             await update.message.reply_text("🚨 LÜTFEN KALK! 🚨"); return
 
