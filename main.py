@@ -31,7 +31,7 @@ user_states = {}
 def get_user_state(uid):
     if uid not in user_states:
         user_states[uid] = {
-            "bakiye": 0, "ath_bakiye": 0, "history": deque(maxlen=60), 
+            "bakiye": 0, "history": deque(maxlen=60), 
             "hit_history": deque(maxlen=5), "is_locked": False, "snapshot": [],
             "last_all_bets": [], "fail_count": 0, "is_warmup_done": False, 
             "waiting_for_balance": False, "last_unit": 0, "current_sector": "N/A"
@@ -98,7 +98,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ GUARDIAN v2.5\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
+    await update.message.reply_text("🛡️ GUARDIAN v2.6\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -125,30 +125,26 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state["waiting_for_balance"]:
         state["bakiye"] = val
-        state["ath_bakiye"] = val
         state["waiting_for_balance"] = False
         state["is_warmup_done"] = True
-        await update.message.reply_text(f"💰 KASA: {val} kaydedildi."); return
+        await update.message.reply_text(f"💰 KASA: {val} OK."); return
 
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
     state["snapshot"].append(snap)
 
     if state["is_warmup_done"]:
-        cost = len(state["last_all_bets"]) * state["last_unit"]
-        state["bakiye"] -= cost
         if val in state["last_all_bets"]:
             state["bakiye"] += state["last_unit"] * 36
             state["hit_history"].append(1)
             state["fail_count"] = 0
             await update.message.reply_text(f"✅ HİT! ({get_sector(val)})")
         else:
+            state["bakiye"] -= (len(state["last_all_bets"]) * state["last_unit"])
             state["hit_history"].append(0)
             state["fail_count"] += 1
             await update.message.reply_text(f"❌ PAS ({val})")
 
-        if state["bakiye"] > state["ath_bakiye"]: state["ath_bakiye"] = state["bakiye"]
         hr = sum(state["hit_history"]) / 5 if len(state["hit_history"]) >= 5 else 1.0
-        
         if state["fail_count"] == 1:
             await update.message.reply_text("⚠️ SARI ALARM!")
         elif state["fail_count"] >= 2 or hr < 0.2:
@@ -168,15 +164,20 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     [e_b.update(get_neighbors(t, 1)) for t in e_t]
     [p_b.update(get_neighbors(t, 1)) for t in p_t]
     
-    state["last_all_bets"] = list(m_b | e_b | p_b)
-    state["last_unit"] = max(math.floor((state["bakiye"] * 0.15) / len(state["last_all_bets"])), 1) if state["bakiye"] > 0 else 0
+    all_bets = list(m_b | e_b | p_b)
+    state["last_all_bets"] = all_bets
+    
+    # %15 Stratejisi ve Birim Hesaplama
+    risk_miktari = state["bakiye"] * 0.15
+    state["last_unit"] = max(math.floor(risk_miktari / len(all_bets)), 1) if state["bakiye"] > 0 else 0
 
     msg = (
         f"🧭 {state['current_sector']}\n"
-        f"💰 KASA: {state['bakiye']}\n\n"
-        f"🎯 MAIN: {m_t}\n"
-        f"⚡ EXTRA: {e_t}\n"
-        f"🔥 ŞANS: {p_t}"
+        f"💰 KASA: {state['bakiye']} | 🪙 BET: {state['last_unit']}\n\n"
+        f"🎯 MAIN (5-2-5): {m_t}\n"
+        f"⚡ EXTRA (3-1-3): {e_t}\n"
+        f"🔥 ŞANS: {p_t}\n\n"
+        f"📊 Toplam Bahis: {len(all_bets)} Sayı"
     )
     await update.message.reply_text(msg)
 
