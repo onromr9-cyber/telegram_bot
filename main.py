@@ -7,7 +7,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 
 # --- AYARLAR ---
 TOKEN = os.getenv("BOT_TOKEN") 
-ADMIN_IDS = {5813833511, 1278793650} # Senin ID'lerin
+ADMIN_IDS = {5813833511, 1278793650} 
 
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
@@ -16,6 +16,7 @@ VOISINS = {22, 18, 29, 7, 28, 12, 35, 3, 26, 0, 32, 15, 19, 4, 21, 2, 25}
 TIER = {27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33}
 ORPHELINS = {1, 20, 14, 31, 9, 17, 34, 6}
 
+# Stratejik Komşu Haritası
 USER_STRATEGY_MAP = {
     0: [6,4,16], 1: [27,23,21], 2: [14,17,8], 3: [5,6,18], 4: [26,7,11], 5: [25,15,35], 
     6: [18,24,15], 7: [21,14,28], 8: [12,32,20], 9: [4,36,22], 10: [26,19,31], 
@@ -61,7 +62,7 @@ def smart_engine_v3(uid):
     scores = {num: 0 for num in range(37)}
     jump_avg = 0
     if len(hist) >= 3:
-        # Cross-Wheel Jump (Zıt Kutup) Kontrolü
+        # Cross-Wheel Jump (Zıt Kutup) Analizi
         dists = [(WHEEL_MAP[hist[i]] - WHEEL_MAP[hist[i-1]] + 37) % 37 for i in range(-1, -3, -1)]
         jump_avg = int(sum(dists) / len(dists))
 
@@ -76,25 +77,22 @@ def smart_engine_v3(uid):
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
-    # MAIN
+    # 🎯 MAIN: En yüksek puanlı 3 çekirdek
     main_t = []
     for cand_num, _ in sorted_sc:
         if len(main_t) >= 3: break
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_t): main_t.append(cand_num)
     
-    # EXTRA (1. sayı mutlaka repeat)
+    # ⚡ EXTRA: İlk sayı mutlaka repeat (son gelen)
     extra_t = [hist[-1]]
     for cand_num, _ in sorted_sc:
         if len(extra_t) >= 2: break
         if cand_num not in main_t and cand_num not in extra_t: extra_t.append(cand_num)
 
-    # KAÇIŞ (Mirroring / Ayna Analizi)
+    # 🔥 KAÇIŞ: Ayna (Mirroring) Analizi - Çarkın tam zıt tarafı
     escape_t = []
-    last_val = hist[-1]
-    # Eğer top zıt kutba zıpladıysa (Ayna Etkisi)
-    mirror_idx = (WHEEL_MAP[last_val] + 18) % 37
-    escape_num = WHEEL[mirror_idx]
-    escape_t.append(escape_num)
+    mirror_idx = (WHEEL_MAP[hist[-1]] + 18) % 37
+    escape_t.append(WHEEL[mirror_idx])
             
     return main_t, extra_t, escape_t
 
@@ -104,14 +102,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_states[uid] = get_user_state(uid)
     await update.message.reply_text("🛡️ GUARDIAN v3.0 (Mirroring Mode)\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
 
+async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid in user_states: del user_states[uid]
+    await start(update, context)
+
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     state = get_user_state(uid)
     
     if state["is_locked"]:
-        await update.message.reply_text("🚨 LÜTFEN KALK! (Kasa Koruma Aktif)\n/reset yazın.")
-        return
+        await update.message.reply_text("🚨 LÜTFEN KALK! (Kasa Koruma Aktif)\n/reset yazın."); return
 
     text = update.message.text.strip().upper()
     if text == '↩️ GERİ AL':
@@ -122,8 +124,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     val = int(text)
 
     if state["waiting_for_balance"]:
-        state["bakiye"] = val; state["waiting_for_balance"] = False
-        state["is_warmup_done"] = True
+        state["bakiye"] = val; state["waiting_for_balance"] = False; state["is_warmup_done"] = True
         await update.message.reply_text(f"💰 KASA: {val} OK."); return
 
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
@@ -140,13 +141,13 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state["hit_history"].append(0); state["fail_count"] += 1
             await update.message.reply_text(f"❌ PAS ({val})")
 
-        hr = sum(state["hit_history"]) / 10 if len(state["hit_history"]) >= 5 else 1.0
-        # 4 HATA SINIRI & KAÇIŞ ALGORİTMASI
+        # 🛡️ EXIT LOGIC (Kovulma Sistemi)
+        hr_last_5 = sum(list(state["hit_history"])[-5:]) / 5 if len(state["hit_history"]) >= 5 else 1.0
         if state["fail_count"] == 3:
             await update.message.reply_text("⚠️ SARI ALARM! (Son Hak)")
-        elif state["fail_count"] >= 4 or (len(state["hit_history"]) >= 8 and hr < 0.1):
+        elif state["fail_count"] >= 4 or hr_last_5 < 0.2:
             state["is_locked"] = True
-            await update.message.reply_text("🚨 LÜTFEN KALK! 🚨"); return
+            await update.message.reply_text("🚨 LÜTFEN KALK! 🚨\nAnaliz dengesi bozuldu."); return
 
     state["history"].append(val)
     if len(state["history"]) == 10 and not state["is_warmup_done"]:
@@ -158,7 +159,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     m_t, e_t, esc_t = smart_engine_v3(uid)
     m_b, e_b, esc_b = set(), set(), set()
     
-    # Chaos Factor: Eğer hata varsa komşuları 2'ye genişlet
+    # 🌀 CHAOS FACTOR: Hata varsa komşuları otomatik genişlet
     neighbor_size = 2 if state["fail_count"] >= 1 else 1
     
     [m_b.update(get_neighbors(t, 2)) for t in m_t]
@@ -167,7 +168,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     all_bets = list(m_b | e_b | esc_b)
     state["last_all_bets"] = all_bets
-    risk_miktari = state["bakiye"] * 0.15
+    risk_miktari = state["bakiye"] * 0.15 # Kasanın %15'i masada
     state["last_unit"] = max(math.floor(risk_miktari / len(all_bets)), 1) if state["bakiye"] > 0 else 0
 
     msg = (
@@ -182,6 +183,6 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("reset", MessageHandler(filters.COMMAND, start)))
+    app.add_handler(CommandHandler("reset", reset_bot))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
     app.run_polling()
