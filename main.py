@@ -32,7 +32,7 @@ def get_user_state(uid):
     if uid not in user_states:
         user_states[uid] = {
             "bakiye": 0, "history": deque(maxlen=60), 
-            "hit_history": deque(maxlen=5), "is_locked": False, "snapshot": [],
+            "hit_history": deque(maxlen=10), "is_locked": False, "snapshot": [],
             "last_all_bets": [], "fail_count": 0, "is_warmup_done": False, 
             "waiting_for_balance": False, "last_unit": 0, "current_sector": "N/A"
         }
@@ -74,20 +74,16 @@ def smart_engine_sector_aware(uid):
             if num in USER_STRATEGY_MAP.get(hist[-1], []): scores[num] *= 2.0
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
-    
-    # MAIN
     main_t = []
     for cand_num, _ in sorted_sc:
         if len(main_t) >= 3: break
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_t): main_t.append(cand_num)
     
-    # EXTRA (İsteğine göre: İlk sayı mutlaka son geleni tekrar eder)
-    extra_t = [hist[-1]]
+    extra_t = [hist[-1]] # İlk sayı repeat
     for cand_num, _ in sorted_sc:
         if len(extra_t) >= 2: break
         if cand_num not in main_t and cand_num not in extra_t: extra_t.append(cand_num)
 
-    # ŞANS
     prob_t = []
     for cand_num, _ in reversed(sorted_sc):
         if len(prob_t) >= 1: break
@@ -99,7 +95,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ GUARDIAN v2.7\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
+    await update.message.reply_text("🛡️ GUARDIAN v2.8 (Patient Mode)\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -134,21 +130,23 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state["snapshot"].append(snap)
 
     if state["is_warmup_done"]:
+        cost = len(state["last_all_bets"]) * state["last_unit"]
         if val in state["last_all_bets"]:
-            state["bakiye"] += (state["last_unit"] * 36) - (len(state["last_all_bets"]) * state["last_unit"])
+            state["bakiye"] += (state["last_unit"] * 36) - cost
             state["hit_history"].append(1)
             state["fail_count"] = 0
             await update.message.reply_text(f"✅ HİT! ({get_sector(val)})")
         else:
-            state["bakiye"] -= (len(state["last_all_bets"]) * state["last_unit"])
+            state["bakiye"] -= cost
             state["hit_history"].append(0)
             state["fail_count"] += 1
             await update.message.reply_text(f"❌ PAS ({val})")
 
-        hr = sum(state["hit_history"]) / 5 if len(state["hit_history"]) >= 5 else 1.0
-        if state["fail_count"] == 1:
-            await update.message.reply_text("⚠️ SARI ALARM!")
-        elif state["fail_count"] >= 2 or hr < 0.2:
+        hr = sum(state["hit_history"]) / 10 if len(state["hit_history"]) >= 10 else 1.0
+        # SABIRLI GÜVENLİK: 3 Pas sınırı ve 0.1 Hit Rate
+        if state["fail_count"] == 2:
+            await update.message.reply_text("⚠️ SARI ALARM! (Son Şans)")
+        elif state["fail_count"] >= 3 or (len(state["hit_history"]) >= 5 and hr < 0.1):
             state["is_locked"] = True
             await update.message.reply_text("🚨 LÜTFEN KALK! 🚨"); return
 
