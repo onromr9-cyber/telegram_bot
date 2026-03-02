@@ -9,10 +9,15 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TOKEN = os.getenv("BOT_TOKEN") 
 ADMIN_IDS = {5813833511, 1278793650}
 
+# Çark ve Sektör Tanımlamaları
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
 
-# Strateji Haritası (Olduğu gibi korundu)
+# Sektör Grupları
+VOISINS = {22, 18, 29, 7, 28, 12, 35, 3, 26, 0, 32, 15, 19, 4, 21, 2, 25}
+TIER = {27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33}
+ORPHELINS = {1, 20, 14, 31, 9, 17, 34, 6}
+
 USER_STRATEGY_MAP = {
     0: [6,4,16], 1: [27,23,21], 2: [14,17,8], 3: [5,6,18], 4: [26,7,11], 5: [25,15,35], 
     6: [18,24,15], 7: [21,14,28], 8: [12,32,20], 9: [4,36,22], 10: [26,19,31], 
@@ -28,27 +33,33 @@ user_states = {}
 def get_user_state(uid):
     if uid not in user_states:
         user_states[uid] = {
-            "bakiye": 0, "ath_bakiye": 0, "history": deque(maxlen=60), 
-            "hit_history": deque(maxlen=5), "is_locked": False, "snapshot": [],
-            "last_main_bets": [], "last_extra_bets": [], "last_prob_bets": [],
-            "last_unit": 0, "waiting_for_balance": False, "balance_set": False,
-            "fail_count": 0  # YENİ: İkinci şans sayacı
+            "history": deque(maxlen=60), "hit_history": deque(maxlen=5), 
+            "is_locked": False, "snapshot": [], "last_all_bets": [],
+            "fail_count": 0, "is_warmup_done": False, "current_sector": "Bilinmiyor"
         }
     return user_states[uid]
+
+def get_sector(n):
+    if n in VOISINS: return "VOISINS"
+    if n in TIER: return "TIER"
+    if n in ORPHELINS: return "ORPHELINS"
+    return "Bilinmiyor"
 
 def get_neighbors(n, s=1):
     idx = WHEEL_MAP[n]
     return [WHEEL[(idx + i) % 37] for i in range(-s, s + 1)]
 
-def smart_engine_hybrid(uid):
+def smart_engine_sector_aware(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
     if not hist: return [0], [32], [15]
     
-    last_num = hist[-1]
+    last_5 = hist[-5:]
+    sector_counts = collections.Counter([get_sector(n) for n in last_5])
+    dominant_sector = sector_counts.most_common(1)[0][0]
+    state["current_sector"] = dominant_sector
+
     scores = {num: 0 for num in range(37)}
-    
-    # Ritim Analizi (Jump Average)
     jump_avg = 0
     if len(hist) >= 3:
         dists = [(WHEEL_MAP[hist[i]] - WHEEL_MAP[hist[i-1]] + 37) % 37 for i in range(-1, -3, -1)]
@@ -60,30 +71,30 @@ def smart_engine_hybrid(uid):
         for d in [-1, 0, 1]:
             num = WHEEL[(p_idx + d) % 37]
             scores[num] += decay
-            if num in USER_STRATEGY_MAP.get(last_num, []):
-                scores[num] *= 2.8
+            # SEKTÖR FARKINDALIĞI: Baskın sektördeki sayılara ek puan
+            if get_sector(num) == dominant_sector:
+                scores[num] *= 1.5
+            if num in USER_STRATEGY_MAP.get(hist[-1], []):
+                scores[num] *= 2.0
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
-    # MAIN: 3 Numara (Bölgesel Yayılım)
     main_t = []
     for cand_num, _ in sorted_sc:
         if len(main_t) >= 3: break
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_t):
             main_t.append(cand_num)
     
-    # EXTRA: Tekrar Kuralı (Mutlaka son 10 sayıdan bir tekrar)
     counts = collections.Counter(hist[-10:])
     repeats = [num for num, count in counts.items() if count > 1]
     extra_t = []
-    if repeats: extra_t.append(repeats[-1]) # En son tekrar eden sayı
+    if repeats: extra_t.append(repeats[-1]) # Repeat Kuralı
     
     for cand_num, _ in sorted_sc:
         if len(extra_t) >= 2: break
         if cand_num not in main_t and cand_num not in extra_t:
             extra_t.append(cand_num)
 
-    # ŞANS (Olasılığı en düşük ama sürpriz sayı)
     prob_t = []
     for cand_num, _ in reversed(sorted_sc):
         if len(prob_t) >= 1: break
@@ -92,28 +103,18 @@ def smart_engine_hybrid(uid):
             
     return main_t, extra_t, prob_t
 
+# --- BOT HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
     reply_markup = ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True)
-    await update.message.reply_text("🛡️ GUARDIAN v2.1: MINDFUL SNIPER AKTİF\nKasa koruma ve tolerans modu devrede. 10 sayı girin.", reply_markup=reply_markup)
+    await update.message.reply_text("🛡️ GUARDIAN v2.3: SECTOR AWARENESS AKTİF\nZeka güncellendi. 10 sayı girin.", reply_markup=reply_markup)
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid in user_states: del user_states[uid]
     await start(update, context)
-
-async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    state = get_user_state(uid)
-    if not state["snapshot"]:
-        await update.message.reply_text("⚠️ Geri alınacak işlem yok."); return
-    last_snap = state["snapshot"].pop()
-    state.update(last_snap)
-    state["history"] = deque(last_snap["history"], maxlen=60)
-    state["hit_history"] = deque(last_snap["hit_history"], maxlen=5)
-    await update.message.reply_text("↩️ Son hamle geri alındı.")
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -121,79 +122,60 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_user_state(uid)
     
     if state["is_locked"]:
-        await update.message.reply_text("🚨 SİSTEM KİLİTLİ: LÜTFEN KALK!\nResetleme için /reset yazın.")
+        await update.message.reply_text("🚨 LÜTFEN KALK! Kasa koruma kilitlendi.\n/reset ile yeni masaya geç.")
         return
 
     text = update.message.text.strip().upper()
     if text == '↩️ GERİ AL':
-        await undo(update, context); return
+        if state["snapshot"]: state.update(state["snapshot"].pop())
+        await update.message.reply_text("↩️ İşlem geri alındı.")
+        return
     if not text.isdigit(): return
 
     val = int(text)
-    if state["waiting_for_balance"]:
-        state["bakiye"] = val
-        state["ath_bakiye"] = val
-        state["waiting_for_balance"] = False
-        state["balance_set"] = True
-        await update.message.reply_text(f"💰 Kasa {val} TL olarak set edildi."); return
-
-    # Snapshot
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
     state["snapshot"].append(snap)
 
-    # Kazanç Kontrolü ve Hit Rate Güncelleme
-    hit_detected = False
-    if state["balance_set"]:
-        all_bets = list(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
-        if all_bets:
-            if val in all_bets:
-                state["bakiye"] += (state["last_unit"] * 36) - (len(all_bets) * state["last_unit"])
-                state["hit_history"].append(1)
-                state["fail_count"] = 0 # Kazanç varsa hata sayacı sıfırlanır
-                hit_detected = True
-                await update.message.reply_text("✅ HİT! Ritim Stabil.")
-            else:
-                state["bakiye"] -= (len(all_bets) * state["last_unit"])
-                state["hit_history"].append(0)
-                state["fail_count"] += 1 # Kayıp varsa sayaç artar
-                await update.message.reply_text(f"❌ PAS ({val})")
+    if state["is_warmup_done"]:
+        if val in state["last_all_bets"]:
+            state["hit_history"].append(1)
+            state["fail_count"] = 0
+            await update.message.reply_text(f"✅ HİT! ({get_sector(val)})")
+        else:
+            state["hit_history"].append(0)
+            state["fail_count"] += 1
+            await update.message.reply_text(f"❌ PAS ({val} - {get_sector(val)})")
 
-    # --- EXIT LOGIC (GUARDIAN) ---
-    if state["balance_set"]:
         hr = sum(state["hit_history"]) / 5 if len(state["hit_history"]) >= 5 else 1.0
-        
-        # %25 Tolerans Kontrolü
         if state["fail_count"] == 1:
-            await update.message.reply_text("⚠️ SARI ALARM: İsabet gelmedi. %25 Tolerans (Son Şans) eli oynanıyor!")
-        
+            await update.message.reply_text("⚠️ SARI ALARM: %25 Tolerans Eli!")
         elif state["fail_count"] >= 2 or hr < 0.2:
             state["is_locked"] = True
-            await update.message.reply_text("🚨 LÜTFEN KALK! 🚨\nArdışık kayıp veya düşük hit rate (%20 altı). Sistem kilitlendi!")
+            await update.message.reply_text("🚨 LÜTFEN KALK! 🚨\nRitim ve Sektör dengesi bozuldu.")
             return
 
     state["history"].append(val)
-    
-    if len(state["history"]) == 10 and not state["balance_set"]:
-        state["waiting_for_balance"] = True
-        await update.message.reply_text("🎯 ISINMA TAMAM.\nKasanı gir:")
+    if len(state["history"]) < 10:
+        await update.message.reply_text(f"📥 Isınma ({len(state['history'])}/10)")
         return
+    state["is_warmup_done"] = True
 
-    # Analiz Motorunu Çalıştır
-    m_t, e_t, p_t = smart_engine_hybrid(uid)
+    m_t, e_t, p_t = smart_engine_sector_aware(uid)
     
+    # Komşu hesaplama
     m_b = set(); [m_b.update(get_neighbors(t, 2)) for t in m_t]
     e_b = set(); [e_b.update(get_neighbors(t, 1)) for t in e_t]
     p_b = set(); [p_b.update(get_neighbors(t, 1)) for t in p_t]
     
-    state["last_main_bets"] = list(m_b)
-    state["last_extra_bets"] = list(e_b)
-    state["last_prob_bets"] = list(p_b)
-    
-    total_bets = len(set(state["last_main_bets"] + state["last_extra_bets"] + state["last_prob_bets"]))
-    state["last_unit"] = max(math.floor((state["bakiye"] * 0.15) / total_bets), 1) if state["balance_set"] else 0
+    state["last_all_bets"] = list(m_b | e_b | p_b)
 
-    prefix = f"💰 KASA: {state['bakiye']} TL | Birim: {state['last_unit']} TL\n" if state['balance_set'] else f"📥 ({len(state['history'])}/10)\n"
-    await update.message.reply_text(f"{prefix}🎯 MAIN: {m_t}\n⚡ EXTRA: {e_t}\n🔥 ŞANS: {p_t}")
+    msg = (
+        f"🧭 BASKIN SEKTÖR: {state['current_sector']}\n\n"
+        f"🎯 MAIN: {m_t}\n"
+        f"⚡ EXTRA (Repeat): {e_t}\n"
+        f"🔥 ŞANS: {p_t}"
+    )
+    await update.message.reply_text(msg)
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
