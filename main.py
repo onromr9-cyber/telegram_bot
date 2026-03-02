@@ -174,9 +174,9 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         f"🧭 {state['current_sector']}\n"
         f"💰 KASA: {state['bakiye']} | 🪙 BET: {state['last_unit']}\n\n"
-        f"🎯 MAIN: {m_t}\n"
-        f"⚡ EXTRA: {e_t}\n"
-        f"🔥 KAÇIŞ: {esc_t}"
+        f"🎯 MAIN (2): {m_t}\n"
+        f"⚡ EXTRA ({neighbor_size}): {e_t}\n"
+        f"🔥 KAÇIŞ ({neighbor_size}): {esc_t}"
     )
     await update.message.reply_text(msg)
 
@@ -186,3 +186,4 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("reset", reset_bot))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
     app.run_polling()
+
