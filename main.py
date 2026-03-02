@@ -98,7 +98,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ GUARDIAN v2.4\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
+    await update.message.reply_text("🛡️ GUARDIAN v2.5\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -123,7 +123,6 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     val = int(text)
 
-    # KASA GİRİŞ MANTIĞI
     if state["waiting_for_balance"]:
         state["bakiye"] = val
         state["ath_bakiye"] = val
@@ -182,4 +181,8 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 if __name__ == '__main__':
-    ApplicationBuilder().token(TOKEN).build().add_handler(CommandHandler("start", start)).add_handler(CommandHandler("reset", reset_bot)).add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play)).run_polling()
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("reset", reset_bot))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
+    app.run_polling()
