@@ -9,8 +9,6 @@ ADMIN_IDS = {5813833511, 1278793650}
 
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
-
-# Klavye Düzeni
 KEYBOARD = [['↩️ GERİ AL', '🗑️ SIFIRLA']]
 
 VOISINS = {22, 18, 29, 7, 28, 12, 35, 3, 26, 0, 32, 15, 19, 4, 21, 2, 25}
@@ -34,9 +32,9 @@ def get_user_state(uid):
         user_states[uid] = {
             "bakiye": 0, "ana_kasa": 0, "history": deque(maxlen=100), 
             "hit_history": deque(maxlen=15), "last_all_bets": [], 
-            "fail_count": 0, "spectator_timer": 0, "is_warmup_done": False, 
+            "fail_count": 0, "win_streak": 0, "spectator_timer": 0, "is_warmup_done": False, 
             "waiting_for_balance": False, "last_unit": 0, "current_sector": "N/A",
-            "snapshot": [] # Geri alma hafızası
+            "snapshot": []
         }
     return user_states[uid]
 
@@ -106,17 +104,25 @@ async def generate_analysis_msg(uid):
     
     kasa_erime = (state["ana_kasa"] - state["bakiye"]) / state["ana_kasa"] if state["ana_kasa"] > 0 else 0
     
+    # --- İZLEME VE RİSK MANTIĞI ---
     if state["spectator_timer"] > 0:
-        state["last_unit"], status, extra_msg = 0, "🟡 İZLEME MODU", f"🚨 Kasa korumada. Kalan Tur: {state['spectator_timer']}"
-    elif state["fail_count"] >= 4 or kasa_erime > 0.45:
+        state["last_unit"], status, extra_msg = 0, "🟡 İZLEME MODU", f"🚨 DUR VE İZLE! Kalan: {state['spectator_timer']}"
+    elif state["fail_count"] >= 3 or kasa_erime > 0.40: # 3 Pas sınırı
         state["spectator_timer"] = 5 
-        state["last_unit"], status, extra_msg = 0, "🟡 İZLEME MODU", "🚨 Ritim bozuldu, 5 tur takip başlıyor."
+        state["last_unit"], status, extra_msg = 0, "🟡 İZLEME MODU", "🚨 3 PAS! Ritim koptu, DUR VE İZLE."
     else:
-        risk_rate = 0.14 if state["fail_count"] == 0 else 0.07
+        # Kademeli Artış Mantığı
+        base_risk = 0.14 if state["fail_count"] == 0 else 0.07
+        multiplier = 1.0
+        if state["win_streak"] == 2: multiplier = 1.2
+        elif state["win_streak"] >= 3: multiplier = 1.5
+        
+        risk_rate = base_risk * multiplier
         risk_miktari = state["bakiye"] * risk_rate
         state["last_unit"] = max(math.floor(risk_miktari / len(all_bets)), 1)
-        status = "🟢 GÜVENLİ" if state["fail_count"] == 0 else "🟠 TEMKİNLİ"
-        extra_msg = "📢 Analiz aktif, devam."
+        
+        status = "🟢 AGRESİF" if state["win_streak"] >= 2 else ("🟢 GÜVENLİ" if state["fail_count"] == 0 else "🟠 TEMKİNLİ")
+        extra_msg = f"🔥 {state['win_streak']} SERİ! Kademeli artış aktif." if state["win_streak"] >= 2 else "📢 Analiz aktif, devam."
 
     return (
         f"📊 DURUM: {status}\n"
@@ -134,7 +140,6 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_user_state(uid)
     text = update.message.text.strip().upper()
 
-    # 1. Kontrol Butonları
     if text == '🗑️ SIFIRLA':
         if uid in user_states: del user_states[uid]
         await update.message.reply_text("🛡️ SIFIRLANDI. 10 sayı girin.", reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True)); return
@@ -142,52 +147,47 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == '↩️ GERİ AL':
         if state["snapshot"]:
             last_snap = state["snapshot"].pop()
-            # Deque yapılarını geri yükle
             state.update({k: (deque(v, maxlen=state[k].maxlen) if isinstance(state[k], deque) else v) for k, v in last_snap.items()})
-            await update.message.reply_text("↩️ Son işlem geri alındı."); return
+            await update.message.reply_text("↩️ Geri alındı."); return
         else:
-            await update.message.reply_text("↩️ Geri alınacak işlem yok."); return
+            await update.message.reply_text("↩️ Kayıt yok."); return
 
     if not text.isdigit(): return
     val = int(text)
 
-    # Snapshot al (Geri alma için mevcut durumu kaydet)
+    # Snapshot
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
     state["snapshot"].append(snap)
     if len(state["snapshot"]) > 10: state["snapshot"].pop(0)
 
-    # 2. Kasa Girişi
     if state["waiting_for_balance"]:
         state["bakiye"] = val; state["ana_kasa"] = val; state["waiting_for_balance"] = False; state["is_warmup_done"] = True
-        msg = await generate_analysis_msg(uid)
-        await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True)); return
+        msg = await generate_analysis_msg(uid); await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True)); return
 
-    # 3. Oyun Mantığı
     if state["is_warmup_done"]:
         if state["spectator_timer"] > 0: state["spectator_timer"] -= 1
 
         cost = len(state["last_all_bets"]) * state["last_unit"]
         if val in state["last_all_bets"] and state["last_unit"] > 0:
             state["bakiye"] += (state["last_unit"] * 36) - cost
-            state["hit_history"].append(1); state["fail_count"] = 0
-            await update.message.reply_text(f"✅ HİT! ({get_sector(val)})")
+            state["hit_history"].append(1); state["fail_count"] = 0; state["win_streak"] += 1
+            await update.message.reply_text(f"✅ HİT! (Seri: {state['win_streak']})")
         elif state["last_unit"] > 0:
             state["bakiye"] -= cost
-            state["hit_history"].append(0); state["fail_count"] += 1
+            state["hit_history"].append(0); state["fail_count"] += 1; state["win_streak"] = 0
             await update.message.reply_text(f"❌ PAS ({val})")
         else:
             is_virtual_hit = val in state["last_all_bets"]
-            state["fail_count"] = 0 if is_virtual_hit else state["fail_count"] + 1
+            if is_virtual_hit: state["fail_count"] = 0; state["win_streak"] += 1
+            else: state["fail_count"] += 1; state["win_streak"] = 0
             await update.message.reply_text(f"👁️ İZLEMEDE: {val} ({'✅' if is_virtual_hit else '❌'})")
 
-    # 4. Sayı Kaydı ve Isınma
     state["history"].append(val)
     if len(state["history"]) == 10 and not state["is_warmup_done"]:
         state["waiting_for_balance"] = True
         await update.message.reply_text("🎯 ISINMA TAMAM.\n💰 KASA GİRİN:", reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True)); return
     elif len(state["history"]) < 10: return 
 
-    # 5. Analiz
     msg = await generate_analysis_msg(uid)
     await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True))
 
@@ -195,7 +195,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ GUARDIAN v5.8\n10 sayı girerek başlayın.", reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True))
+    await update.message.reply_text("🛡️ AGGRESSIVE GUARDIAN v5.9\n3 Pas = İzleme | Seri = Artış", reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True))
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
