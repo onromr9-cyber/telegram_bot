@@ -150,21 +150,16 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("↩️ Kayıt yok."); return
 
-    # --- AKILLI GÜVENLİK FİLTRESİ (DÜZELTİLDİ) ---
     if not text.isdigit():
         await update.message.reply_text("⚠️ UYARI: Lütfen sadece rakam girin!")
         return
     
     val = int(text)
-    
-    # Kasa beklemiyorsak rulet sayısı kontrolü yap (0-36)
     if not state["waiting_for_balance"]:
         if val < 0 or val > 36:
-            await update.message.reply_text(f"⚠️ HATA: {val} geçersiz! (0-36 arası girin)")
+            await update.message.reply_text(f"⚠️ HATA: {val} geçersiz! (0-36 arası)")
             return
-    # --------------------------------------------
 
-    # Snapshot
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
     state["snapshot"].append(snap)
     if len(state["snapshot"]) > 10: state["snapshot"].pop(0)
@@ -179,8 +174,16 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cost = len(state["last_all_bets"]) * state["last_unit"]
         if val in state["last_all_bets"] and state["last_unit"] > 0:
             state["bakiye"] += (state["last_unit"] * 36) - cost
-            state["hit_history"].append(1); state["fail_count"] = 0; state["win_streak"] += 1
-            await update.message.reply_text(f"✅ HİT! (Seri: {state['win_streak']})")
+            state["hit_history"].append(1); state["fail_count"] = 0
+            state["win_streak"] += 1
+            
+            # --- PROFIT LOCK (5 HİT RESET) ---
+            if state["win_streak"] >= 5:
+                state["win_streak"] = 0
+                await update.message.reply_text("🏆 5 HİT SERİSİ TAMAMLANDI! \n💰 Kâr koruma için risk sıfırlandı.")
+            else:
+                await update.message.reply_text(f"✅ HİT! (Seri: {state['win_streak']})")
+        
         elif state["last_unit"] > 0:
             state["bakiye"] -= cost
             state["hit_history"].append(0); state["fail_count"] += 1; state["win_streak"] = 0
@@ -204,7 +207,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ SAFE GUARDIAN v5.11\nAkıllı filtre aktif (Kasa girişi düzeldi).", reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True))
+    await update.message.reply_text("🛡️ PROFIT GUARDIAN v5.12\n5 Hit sonrası otomatik reset aktif.", reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True))
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
