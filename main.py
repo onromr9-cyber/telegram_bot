@@ -138,7 +138,6 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_user_state(uid)
     text = update.message.text.strip().upper()
 
-    # 1. Kontrol Butonları
     if text == '🗑️ SIFIRLA':
         if uid in user_states: del user_states[uid]
         await update.message.reply_text("🛡️ SIFIRLANDI. 10 sayı girin.", reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True)); return
@@ -151,16 +150,19 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("↩️ Kayıt yok."); return
 
-    # --- GİRİŞ GÜVENLİK FİLTRESİ ---
+    # --- AKILLI GÜVENLİK FİLTRESİ (DÜZELTİLDİ) ---
     if not text.isdigit():
         await update.message.reply_text("⚠️ UYARI: Lütfen sadece rakam girin!")
         return
     
     val = int(text)
-    if val < 0 or val > 36:
-        await update.message.reply_text(f"⚠️ HATA: {val} geçersiz! (0-36 arası bir sayı girin)")
-        return
-    # ------------------------------
+    
+    # Kasa beklemiyorsak rulet sayısı kontrolü yap (0-36)
+    if not state["waiting_for_balance"]:
+        if val < 0 or val > 36:
+            await update.message.reply_text(f"⚠️ HATA: {val} geçersiz! (0-36 arası girin)")
+            return
+    # --------------------------------------------
 
     # Snapshot
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
@@ -202,7 +204,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ SAFE GUARDIAN v5.10\nSayı girişi güvenliği aktif.", reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True))
+    await update.message.reply_text("🛡️ SAFE GUARDIAN v5.11\nAkıllı filtre aktif (Kasa girişi düzeldi).", reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True))
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
