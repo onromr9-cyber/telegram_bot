@@ -1,6 +1,7 @@
 import os
 import math
 import collections
+import numpy as np
 from collections import deque
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -16,26 +17,16 @@ VOISINS = {22, 18, 29, 7, 28, 12, 35, 3, 26, 0, 32, 15, 19, 4, 21, 2, 25}
 TIER = {27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33}
 ORPHELINS = {1, 20, 14, 31, 9, 17, 34, 6}
 
-# Stratejik Komşu Haritası
-USER_STRATEGY_MAP = {
-    0: [6,4,16], 1: [27,23,21], 2: [14,17,8], 3: [5,6,18], 4: [26,7,11], 5: [25,15,35], 
-    6: [18,24,15], 7: [21,14,28], 8: [12,32,20], 9: [4,36,22], 10: [26,19,31], 
-    11: [29,4,33], 12: [23,32,36], 13: [31,28,16], 14: [25,13,26], 15: [35,6,30], 
-    16: [17,20,11], 17: [3,2,11], 18: [19,35,10], 19: [33,29,8], 20: [21,30,10], 
-    21: [23,27,28], 22: [27,32,5], 23: [14,15,11], 24: [6,29,30], 25: [28,36,24], 
-    26: [10,31,13], 27: [22,20,32], 28: [2,13,16], 29: [4,11,31], 30: [16,3,29], 
-    31: [18,13,0], 32: [23,35,27], 33: [19,22,11], 34: [7,31,6], 35: [17,36,5], 36: [12,14,0]
-}
-
 user_states = {}
 
 def get_user_state(uid):
     if uid not in user_states:
         user_states[uid] = {
-            "bakiye": 0, "history": deque(maxlen=60), 
+            "bakiye": 0, "ana_kasa": 0, "history": deque(maxlen=100), 
             "hit_history": deque(maxlen=10), "is_locked": False, "snapshot": [],
             "last_all_bets": [], "fail_count": 0, "is_warmup_done": False, 
-            "waiting_for_balance": False, "last_unit": 0, "current_sector": "N/A"
+            "waiting_for_balance": False, "last_unit": 0, "current_sector": "N/A",
+            "virtual_mode": False
         }
     return user_states[uid]
 
@@ -49,58 +40,88 @@ def get_neighbors(n, s=1):
     idx = WHEEL_MAP[n]
     return [WHEEL[(idx + i) % 37] for i in range(-s, s + 1)]
 
-def smart_engine_v3(uid):
+# --- ULTIMATE ENGINE V4.1 ---
+async def smart_engine_v4_1(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
-    if not hist: return [0,32,15], [19,4], [21]
     
-    last_5 = hist[-5:]
-    sector_counts = collections.Counter([get_sector(n) for n in last_5])
-    dominant_sector = sector_counts.most_common(1)[0][0]
+    # 1. Kaos ve Ritim Kontrolü
+    jumps = [(WHEEL_MAP[hist[i]] - WHEEL_MAP[hist[i-1]] + 37) % 37 for i in range(1, len(hist))]
+    chaos_factor = np.std(jumps[-6:]) if len(jumps) >= 6 else 10.0
+    avg_jump = int(np.mean(jumps[-10:])) if len(jumps) >= 10 else 18
+
+    # 2. Sanal Mod Tetikleyici (Virtual Mode)
+    if chaos_factor > 12.5:
+        state["virtual_mode"] = True
+    elif chaos_factor < 9.5:
+        state["virtual_mode"] = False
+
+    # 3. Sıcak Sayı Analizi (Hot Numbers)
+    hot_counts = collections.Counter(hist[-25:])
+    hot_numbers = [num for num, count in hot_counts.items() if count >= 3]
+
+    # 4. Sektör İnadı
+    last_5_sectors = [get_sector(n) for n in hist[-5:]]
+    sector_counts = collections.Counter(last_5_sectors)
+    dominant_sector, dom_count = sector_counts.most_common(1)[0]
     state["current_sector"] = dominant_sector
 
+    # 5. Puanlama Sistemi
     scores = {num: 0 for num in range(37)}
-    jump_avg = 0
-    if len(hist) >= 3:
-        # Cross-Wheel Jump (Zıt Kutup) Analizi
-        dists = [(WHEEL_MAP[hist[i]] - WHEEL_MAP[hist[i-1]] + 37) % 37 for i in range(-1, -3, -1)]
-        jump_avg = int(sum(dists) / len(dists))
-
-    for i, n in enumerate(reversed(hist[-15:])):
-        decay = 100 / (1.15**i)
-        p_idx = (WHEEL_MAP[n] + jump_avg) % 37
+    for i, n in enumerate(reversed(hist[-20:])):
+        decay = 100 / (1.12**i)
+        target_idx = (WHEEL_MAP[n] + avg_jump) % 37
         for d in [-1, 0, 1]:
-            num = WHEEL[(p_idx + d) % 37]
+            num = WHEEL[(target_idx + d) % 37]
             scores[num] += decay
-            if get_sector(num) == dominant_sector: scores[num] *= 1.5
-            if num in USER_STRATEGY_MAP.get(hist[-1], []): scores[num] *= 2.0
+            if get_sector(num) == dominant_sector and dom_count >= 3: scores[num] *= 1.6
+            if num in hot_numbers: scores[num] *= 2.5 # HOT NUMBER BONUS
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
-    # 🎯 MAIN: En yüksek puanlı 3 çekirdek
-    main_t = []
-    for cand_num, _ in sorted_sc:
-        if len(main_t) >= 3: break
-        if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_t): main_t.append(cand_num)
-    
-    # ⚡ EXTRA: İlk sayı mutlaka repeat (son gelen)
-    extra_t = [hist[-1]]
-    for cand_num, _ in sorted_sc:
-        if len(extra_t) >= 2: break
-        if cand_num not in main_t and cand_num not in extra_t: extra_t.append(cand_num)
-
-    # 🔥 KAÇIŞ: Ayna (Mirroring) Analizi - Çarkın tam zıt tarafı
-    escape_t = []
+    # Bahis Grupları
+    main_t = [sorted_sc[0][0], sorted_sc[1][0]]
+    extra_t = [hist[-1], sorted_sc[2][0]] # Repeat + En iyi 3.
     mirror_idx = (WHEEL_MAP[hist[-1]] + 18) % 37
-    escape_t.append(WHEEL[mirror_idx])
-            
-    return main_t, extra_t, escape_t
+    escape_t = [WHEEL[mirror_idx]]
 
+    n_size = 2 if chaos_factor > 8 else 1
+    m_b, e_b, esc_b = set(), set(), set()
+    [m_b.update(get_neighbors(t, 2)) for t in main_t]
+    [e_b.update(get_neighbors(t, n_size)) for t in extra_t]
+    [esc_b.update(get_neighbors(t, 1)) for t in escape_t]
+    
+    all_bets = list(m_b | e_b | esc_b)
+    state["last_all_bets"] = all_bets
+    
+    # Akıllı Kasa Yönetimi (%12 Risk)
+    risk_cap = state["bakiye"] * 0.12
+    unit = max(math.floor(risk_cap / len(all_bets)), 1) if state["bakiye"] > 0 else 0
+    state["last_unit"] = unit
+
+    # Durum Etiketi
+    if state["virtual_mode"]:
+        status_label = "🚫 SANAL TAKİP (Bahis Yapma!)"
+    else:
+        status_label = "🟢 GİRİŞ UYGUN" if chaos_factor < 9 else "🟡 TEMKİNLİ"
+    
+    msg = (
+        f"📊 DURUM: {status_label}\n"
+        f"🌀 KAOS: {chaos_factor:.1f} | 🔥 SICAK: {hot_numbers[:3]}\n"
+        f"💰 KASA: {state['bakiye']} | 🪙 BET: {state['last_unit']}\n\n"
+        f"🎯 MAIN (2): {main_t}\n"
+        f"⚡ EXTRA ({n_size}): {extra_t}\n"
+        f"🔥 KAÇIŞ: {escape_t}"
+    )
+    return msg
+
+# --- TELEGRAM BOT HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ GUARDIAN v3.0 (Mirroring Mode)\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
+    await update.message.reply_text("🛡️ GUARDIAN v4.1 ULTIMATE\n10 sayı girerek başlayın.", 
+                                    reply_markup=ReplyKeyboardMarkup([['↩️ GERİ AL', '/reset']], resize_keyboard=True))
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -113,7 +134,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_user_state(uid)
     
     if state["is_locked"]:
-        await update.message.reply_text("🚨 LÜTFEN KALK! (Kasa Koruma Aktif)\n/reset yazın."); return
+        await update.message.reply_text("🚨 LÜTFEN KALK! (Kasa Koruma Aktif)\nBakiye eridi veya ritim koptu."); return
 
     text = update.message.text.strip().upper()
     if text == '↩️ GERİ AL':
@@ -124,60 +145,44 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     val = int(text)
 
     if state["waiting_for_balance"]:
-        state["bakiye"] = val; state["waiting_for_balance"] = False; state["is_warmup_done"] = True
-        await update.message.reply_text(f"💰 KASA: {val} OK."); return
-
-    snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
-    state["snapshot"].append(snap)
+        state["bakiye"] = val; state["ana_kasa"] = val; state["waiting_for_balance"] = False; state["is_warmup_done"] = True
+        msg = await smart_engine_v4_1(uid)
+        await update.message.reply_text(f"💰 KASA: {val} OK.\n\n{msg}"); return
 
     if state["is_warmup_done"]:
-        cost = len(state["last_all_bets"]) * state["last_unit"]
-        if val in state["last_all_bets"]:
-            state["bakiye"] += (state["last_unit"] * 36) - cost
-            state["hit_history"].append(1); state["fail_count"] = 0
-            await update.message.reply_text(f"✅ HİT! ({get_sector(val)})")
-        else:
-            state["bakiye"] -= cost
-            state["hit_history"].append(0); state["fail_count"] += 1
-            await update.message.reply_text(f"❌ PAS ({val})")
+        snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
+        state["snapshot"].append(snap)
 
-        # 🛡️ EXIT LOGIC (Kovulma Sistemi)
+        if not state["virtual_mode"]: # Sadece sanal modda değilsek kasayı güncelle
+            cost = len(state["last_all_bets"]) * state["last_unit"]
+            if val in state["last_all_bets"]:
+                state["bakiye"] += (state["last_unit"] * 36) - cost
+                state["hit_history"].append(1); state["fail_count"] = 0
+                await update.message.reply_text(f"✅ HİT! ({val})")
+            else:
+                state["bakiye"] -= cost
+                state["hit_history"].append(0); state["fail_count"] += 1
+                await update.message.reply_text(f"❌ PAS ({val})")
+        else:
+            await update.message.reply_text(f"👁️ SANAL TAKİP: {val} (Kasa etkilenmedi)")
+
+        # Profit Lock Check (%20 Kar Kilidi)
+        if state["bakiye"] > state["ana_kasa"] * 1.5:
+             await update.message.reply_text("💎 HEDEF AŞILDI! Kârı Kilitle ve Masadan Ayrıl.")
+
         hr_last_5 = sum(list(state["hit_history"])[-5:]) / 5 if len(state["hit_history"]) >= 5 else 1.0
-        if state["fail_count"] == 3:
-            await update.message.reply_text("⚠️ SARI ALARM! (Son Hak)")
-        elif state["fail_count"] >= 4 or hr_last_5 < 0.2:
+        if state["fail_count"] >= 5 or (hr_last_5 < 0.2 and not state["virtual_mode"]):
             state["is_locked"] = True
-            await update.message.reply_text("🚨 LÜTFEN KALK! 🚨\nAnaliz dengesi bozuldu."); return
+            await update.message.reply_text("🚨 LÜTFEN KALK! 🚨\nMatematiksel denge bozuldu."); return
 
     state["history"].append(val)
     if len(state["history"]) == 10 and not state["is_warmup_done"]:
         state["waiting_for_balance"] = True
-        await update.message.reply_text("🎯 ISINMA TAMAM.\nKASA GİRİN:"); return
+        await update.message.reply_text("🎯 ISINMA TAMAM. KASA GİRİN:"); return
     elif len(state["history"]) < 10:
         await update.message.reply_text(f"📥 {len(state['history'])}/10"); return
 
-    m_t, e_t, esc_t = smart_engine_v3(uid)
-    m_b, e_b, esc_b = set(), set(), set()
-    
-    # 🌀 CHAOS FACTOR: Hata varsa komşuları otomatik genişlet
-    neighbor_size = 2 if state["fail_count"] >= 1 else 1
-    
-    [m_b.update(get_neighbors(t, 2)) for t in m_t]
-    [e_b.update(get_neighbors(t, neighbor_size)) for t in e_t]
-    [esc_b.update(get_neighbors(t, neighbor_size)) for t in esc_t]
-    
-    all_bets = list(m_b | e_b | esc_b)
-    state["last_all_bets"] = all_bets
-    risk_miktari = state["bakiye"] * 0.15 # Kasanın %15'i masada
-    state["last_unit"] = max(math.floor(risk_miktari / len(all_bets)), 1) if state["bakiye"] > 0 else 0
-
-    msg = (
-        f"🧭 {state['current_sector']}\n"
-        f"💰 KASA: {state['bakiye']} | 🪙 BET: {state['last_unit']}\n\n"
-        f"🎯 MAIN (2): {m_t}\n"
-        f"⚡ EXTRA ({neighbor_size}): {e_t}\n"
-        f"🔥 KAÇIŞ ({neighbor_size}): {esc_t}"
-    )
+    msg = await smart_engine_v4_1(uid)
     await update.message.reply_text(msg)
 
 if __name__ == '__main__':
@@ -186,4 +191,3 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("reset", reset_bot))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
     app.run_polling()
-
