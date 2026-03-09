@@ -104,14 +104,12 @@ async def generate_analysis_msg(uid):
     
     kasa_erime = (state["ana_kasa"] - state["bakiye"]) / state["ana_kasa"] if state["ana_kasa"] > 0 else 0
     
-    # --- İZLEME VE RİSK MANTIĞI ---
     if state["spectator_timer"] > 0:
         state["last_unit"], status, extra_msg = 0, "🟡 İZLEME MODU", f"🚨 DUR VE İZLE! Kalan: {state['spectator_timer']}"
-    elif state["fail_count"] >= 3 or kasa_erime > 0.40: # 3 Pas sınırı
+    elif state["fail_count"] >= 3 or kasa_erime > 0.40:
         state["spectator_timer"] = 5 
         state["last_unit"], status, extra_msg = 0, "🟡 İZLEME MODU", "🚨 3 PAS! Ritim koptu, DUR VE İZLE."
     else:
-        # Kademeli Artış Mantığı
         base_risk = 0.14 if state["fail_count"] == 0 else 0.07
         multiplier = 1.0
         if state["win_streak"] == 2: multiplier = 1.2
@@ -140,6 +138,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_user_state(uid)
     text = update.message.text.strip().upper()
 
+    # 1. Kontrol Butonları
     if text == '🗑️ SIFIRLA':
         if uid in user_states: del user_states[uid]
         await update.message.reply_text("🛡️ SIFIRLANDI. 10 sayı girin.", reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True)); return
@@ -152,8 +151,16 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("↩️ Kayıt yok."); return
 
-    if not text.isdigit(): return
+    # --- GİRİŞ GÜVENLİK FİLTRESİ ---
+    if not text.isdigit():
+        await update.message.reply_text("⚠️ UYARI: Lütfen sadece rakam girin!")
+        return
+    
     val = int(text)
+    if val < 0 or val > 36:
+        await update.message.reply_text(f"⚠️ HATA: {val} geçersiz! (0-36 arası bir sayı girin)")
+        return
+    # ------------------------------
 
     # Snapshot
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
@@ -195,7 +202,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ AGGRESSIVE GUARDIAN v5.9\n3 Pas = İzleme | Seri = Artış", reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True))
+    await update.message.reply_text("🛡️ SAFE GUARDIAN v5.10\nSayı girişi güvenliği aktif.", reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True))
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
