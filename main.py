@@ -1,5 +1,4 @@
 import os, math, collections
-import numpy as np
 from collections import deque
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -71,7 +70,6 @@ def smart_engine_v3_core(uid):
             if num in USER_STRATEGY_MAP.get(hist[-1], []): scores[num] *= 2.0
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
-    
     main_t = []
     for cand_num, _ in sorted_sc:
         if len(main_t) >= 3: break
@@ -84,56 +82,10 @@ def smart_engine_v3_core(uid):
 
     mirror_idx = (WHEEL_MAP[hist[-1]] + 18) % 37
     escape_t = [WHEEL[mirror_idx]]
-            
     return main_t, extra_t, escape_t
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if uid not in ADMIN_IDS: return
-    user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ GUARDIAN v5.5 (Spectator Mode)\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['/reset']], resize_keyboard=True))
-
-async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if uid not in ADMIN_IDS: return
+async def generate_analysis_msg(uid):
     state = get_user_state(uid)
-    text = update.message.text.strip().upper()
-
-    if text == '/RESET':
-        if uid in user_states: del user_states[uid]
-        await start(update, context); return
-    if not text.isdigit(): return
-    val = int(text)
-
-    if state["waiting_for_balance"]:
-        state["bakiye"] = val; state["ana_kasa"] = val; state["waiting_for_balance"] = False; state["is_warmup_done"] = True
-        await update.message.reply_text(f"💰 KASA: {val} OK."); return
-
-    if state["is_warmup_done"]:
-        cost = len(state["last_all_bets"]) * state["last_unit"]
-        if val in state["last_all_bets"] and state["last_unit"] > 0:
-            state["bakiye"] += (state["last_unit"] * 36) - cost
-            state["hit_history"].append(1); state["fail_count"] = 0
-            await update.message.reply_text(f"✅ HİT! ({get_sector(val)})")
-        elif state["last_unit"] > 0:
-            state["bakiye"] -= cost
-            state["hit_history"].append(0); state["fail_count"] += 1
-            await update.message.reply_text(f"❌ PAS ({val})")
-        else:
-            # İzleme modundayken isabet kontrolü
-            is_virtual_hit = val in state["last_all_bets"]
-            state["hit_history"].append(1 if is_virtual_hit else 0)
-            if is_virtual_hit: state["fail_count"] = 0
-            else: state["fail_count"] += 1
-            await update.message.reply_text(f"👁️ İZLEMEDE: {val} ({'✅' if is_virtual_hit else '❌'})")
-
-    state["history"].append(val)
-    if len(state["history"]) == 10 and not state["is_warmup_done"]:
-        state["waiting_for_balance"] = True
-        await update.message.reply_text("🎯 ISINMA TAMAM.\nKASA GİRİN:"); return
-    elif len(state["history"]) < 10:
-        await update.message.reply_text(f"📥 {len(state['history'])}/10"); return
-
     m_t, e_t, esc_t = smart_engine_v3_core(uid)
     m_b, e_b, esc_b = set(), set(), set()
     
@@ -145,17 +97,11 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_bets = list(m_b | e_b | esc_b)
     state["last_all_bets"] = all_bets
     
-    # --- İZLEME VE RİSK MANTIĞI ---
     kasa_erime = (state["ana_kasa"] - state["bakiye"]) / state["ana_kasa"] if state["ana_kasa"] > 0 else 0
     hr_last = sum(list(state["hit_history"])[-8:]) / 8 if len(state["hit_history"]) >= 8 else 0.5
     
-    # İzleme Modu Tetikleyicileri
-    is_spectator = False
     if state["fail_count"] >= 4 or kasa_erime > 0.45 or hr_last < 0.15:
-        is_spectator = True
-        state["last_unit"] = 0
-        status = "🟡 İZLEME MODU"
-        extra_msg = "🚨 Ritim koptu, sanal takipteyiz."
+        state["last_unit"], status, extra_msg = 0, "🟡 İZLEME MODU", "🚨 Ritim koptu, sanal takipteyiz."
     else:
         risk_rate = 0.14 if state["fail_count"] == 0 else 0.07
         risk_miktari = state["bakiye"] * risk_rate
@@ -163,7 +109,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status = "🟢 GÜVENLİ" if state["fail_count"] == 0 else "🟠 TEMKİNLİ"
         extra_msg = "✅ Ritim yakalandı, bahse dön." if hr_last > 0.25 else "📢 Analiz aktif, devam."
 
-    msg = (
+    return (
         f"📊 DURUM: {status}\n"
         f"💰 KASA: {state['bakiye']} | 🪙 UNIT: {state['last_unit']}\n\n"
         f"🔥 MAIN: {m_t}\n"
@@ -172,7 +118,60 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🧭 SEKTÖR: {state['current_sector']}\n"
         f"📢 {extra_msg}"
     )
+
+async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid not in ADMIN_IDS: return
+    state = get_user_state(uid)
+    text = update.message.text.strip().upper()
+
+    if text == '/RESET':
+        if uid in user_states: del user_states[uid]
+        await update.message.reply_text("🛡️ SIFIRLANDI. 10 sayı girin."); return
+    if not text.isdigit(): return
+    val = int(text)
+
+    # 1. Kasa Giriş Bekleme
+    if state["waiting_for_balance"]:
+        state["bakiye"] = val; state["ana_kasa"] = val; state["waiting_for_balance"] = False; state["is_warmup_done"] = True
+        msg = await generate_analysis_msg(uid)
+        await update.message.reply_text(msg); return
+
+    # 2. Oyun Süreci (Isınma Bittiyse)
+    if state["is_warmup_done"]:
+        cost = len(state["last_all_bets"]) * state["last_unit"]
+        if val in state["last_all_bets"] and state["last_unit"] > 0:
+            state["bakiye"] += (state["last_unit"] * 36) - cost
+            state["hit_history"].append(1); state["fail_count"] = 0
+            await update.message.reply_text(f"✅ HİT! ({get_sector(val)})")
+        elif state["last_unit"] > 0:
+            state["bakiye"] -= cost
+            state["hit_history"].append(0); state["fail_count"] += 1
+            await update.message.reply_text(f"❌ PAS ({val})")
+        else:
+            is_virtual_hit = val in state["last_all_bets"]
+            state["hit_history"].append(1 if is_virtual_hit else 0)
+            state["fail_count"] = 0 if is_virtual_hit else state["fail_count"] + 1
+            await update.message.reply_text(f"👁️ İZLEMEDE: {val} ({'✅' if is_virtual_hit else '❌'})")
+
+    # 3. Sayı Kaydı ve Isınma Kontrolü
+    state["history"].append(val)
+    if len(state["history"]) == 10 and not state["is_warmup_done"]:
+        state["waiting_for_balance"] = True
+        await update.message.reply_text("🎯 ISINMA TAMAM.\n💰 KASA GİRİN:"); return
+    elif len(state["history"]) < 10:
+        # Sessiz ısınma: Sadece 10. sayıda tepki verir
+        return 
+
+    # 4. Analiz Gönderimi
+    msg = await generate_analysis_msg(uid)
     await update.message.reply_text(msg)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid not in ADMIN_IDS: return
+    user_states[uid] = get_user_state(uid)
+    await update.message.reply_text("🛡️ GUARDIAN v5.6\n10 sayı girerek başlayın.")
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
