@@ -31,8 +31,8 @@ def get_user_state(uid):
     if uid not in user_states:
         user_states[uid] = {
             "bakiye": 0, "ana_kasa": 0, "history": deque(maxlen=100), 
-            "hit_history": deque(maxlen=15), "is_locked": False,
-            "last_all_bets": [], "fail_count": 0, "is_warmup_done": False, 
+            "hit_history": deque(maxlen=15), "last_all_bets": [], 
+            "fail_count": 0, "is_warmup_done": False, 
             "waiting_for_balance": False, "last_unit": 0, "current_sector": "N/A"
         }
     return user_states[uid]
@@ -47,7 +47,6 @@ def get_neighbors(n, s=1):
     idx = WHEEL_MAP[n]
     return [WHEEL[(idx + i) % 37] for i in range(-s, s + 1)]
 
-# --- ENGINE V3 ANALİZİ (Değişmedi) ---
 def smart_engine_v3_core(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
@@ -78,9 +77,9 @@ def smart_engine_v3_core(uid):
         if len(main_t) >= 3: break
         if all(abs(WHEEL_MAP[cand_num] - WHEEL_MAP[t]) >= 7 for t in main_t): main_t.append(cand_num)
     
-    extra_t = [hist[-1]] # İlk sayı repeat
+    extra_t = [hist[-1]] 
     for cand_num, _ in sorted_sc:
-        if len(extra_t) >= 3: break # Extra sayısını 3'e çıkardım
+        if len(extra_t) >= 3: break 
         if cand_num not in main_t and cand_num not in extra_t: extra_t.append(cand_num)
 
     mirror_idx = (WHEEL_MAP[hist[-1]] + 18) % 37
@@ -92,17 +91,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ LEGEND v5.4 (Mirroring Engine)\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['/reset']], resize_keyboard=True))
+    await update.message.reply_text("🛡️ GUARDIAN v5.5 (Spectator Mode)\n10 sayı girin.", reply_markup=ReplyKeyboardMarkup([['/reset']], resize_keyboard=True))
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     state = get_user_state(uid)
-    
-    if state["is_locked"]:
-        await update.message.reply_text("🚨 LÜTFEN KALK!\nKasa koruma aktif. /reset yazın."); return
-
     text = update.message.text.strip().upper()
+
     if text == '/RESET':
         if uid in user_states: del user_states[uid]
         await start(update, context); return
@@ -123,14 +119,13 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state["bakiye"] -= cost
             state["hit_history"].append(0); state["fail_count"] += 1
             await update.message.reply_text(f"❌ PAS ({val})")
-
-        # Esnetilmiş Koruma Sistemi
-        kasa_erime = (state["ana_kasa"] - state["bakiye"]) / state["ana_kasa"] if state["ana_kasa"] > 0 else 0
-        hr_last = sum(list(state["hit_history"])[-10:]) / 10 if len(state["hit_history"]) >= 10 else 0.5
-        
-        if kasa_erime > 0.50 or (len(state["hit_history"]) >= 10 and hr_last < 0.15):
-            state["is_locked"] = True
-            await update.message.reply_text("🚨 LÜTFEN KALK! 🚨\nMatematiksel denge bozuldu."); return
+        else:
+            # İzleme modundayken isabet kontrolü
+            is_virtual_hit = val in state["last_all_bets"]
+            state["hit_history"].append(1 if is_virtual_hit else 0)
+            if is_virtual_hit: state["fail_count"] = 0
+            else: state["fail_count"] += 1
+            await update.message.reply_text(f"👁️ İZLEMEDE: {val} ({'✅' if is_virtual_hit else '❌'})")
 
     state["history"].append(val)
     if len(state["history"]) == 10 and not state["is_warmup_done"]:
@@ -139,7 +134,6 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif len(state["history"]) < 10:
         await update.message.reply_text(f"📥 {len(state['history'])}/10"); return
 
-    # Analiz ve Bahis Hesaplama
     m_t, e_t, esc_t = smart_engine_v3_core(uid)
     m_b, e_b, esc_b = set(), set(), set()
     
@@ -151,13 +145,24 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_bets = list(m_b | e_b | esc_b)
     state["last_all_bets"] = all_bets
     
-    # Dinamik Risk Kontrolü
-    risk_rate = 0.14 if state["fail_count"] == 0 else 0.07
-    risk_miktari = state["bakiye"] * risk_rate
-    state["last_unit"] = max(math.floor(risk_miktari / len(all_bets)), 1) if state["bakiye"] > 0 else 0
+    # --- İZLEME VE RİSK MANTIĞI ---
+    kasa_erime = (state["ana_kasa"] - state["bakiye"]) / state["ana_kasa"] if state["ana_kasa"] > 0 else 0
+    hr_last = sum(list(state["hit_history"])[-8:]) / 8 if len(state["hit_history"]) >= 8 else 0.5
+    
+    # İzleme Modu Tetikleyicileri
+    is_spectator = False
+    if state["fail_count"] >= 4 or kasa_erime > 0.45 or hr_last < 0.15:
+        is_spectator = True
+        state["last_unit"] = 0
+        status = "🟡 İZLEME MODU"
+        extra_msg = "🚨 Ritim koptu, sanal takipteyiz."
+    else:
+        risk_rate = 0.14 if state["fail_count"] == 0 else 0.07
+        risk_miktari = state["bakiye"] * risk_rate
+        state["last_unit"] = max(math.floor(risk_miktari / len(all_bets)), 1)
+        status = "🟢 GÜVENLİ" if state["fail_count"] == 0 else "🟠 TEMKİNLİ"
+        extra_msg = "✅ Ritim yakalandı, bahse dön." if hr_last > 0.25 else "📢 Analiz aktif, devam."
 
-    # Sadeleşmiş Mesaj
-    status = "🟢 GÜVENLİ" if state["fail_count"] == 0 else "🟡 TEMKİNLİ"
     msg = (
         f"📊 DURUM: {status}\n"
         f"💰 KASA: {state['bakiye']} | 🪙 UNIT: {state['last_unit']}\n\n"
@@ -165,7 +170,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⚡ EXTRA: {e_t}\n"
         f"🌀 KAÇIŞ: {esc_t}\n\n"
         f"🧭 SEKTÖR: {state['current_sector']}\n"
-        f"🔄 SON: {val}"
+        f"📢 {extra_msg}"
     )
     await update.message.reply_text(msg)
 
