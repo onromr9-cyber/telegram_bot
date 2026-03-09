@@ -5,7 +5,6 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # --- AYARLAR ---
-# Railway'de Variables kısmına BOT_TOKEN eklemeyi unutma!
 TOKEN = os.getenv("BOT_TOKEN") 
 ADMIN_IDS = {5813833511, 1278793650} 
 
@@ -28,18 +27,18 @@ def get_neighbors(n, s=2):
     idx = WHEEL_MAP[n]
     return [WHEEL[(idx + i) % 37] for i in range(-s, s + 1)]
 
-# --- ENGINE V5.1 SNIPER SHIELD ---
-async def smart_engine_v5_1(uid):
+# --- ENGINE V5.2 LEGEND SHIELD ---
+async def smart_engine_v5_2(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
     last_num = hist[-1]
     
-    # 1. Analiz Motoru
+    # 1. Analiz Motoru (Geniş Tarama)
     jumps = [(WHEEL_MAP[hist[i]] - WHEEL_MAP[hist[i-1]] + 37) % 37 for i in range(1, len(hist))]
     chaos_factor = np.std(jumps[-6:]) if len(jumps) >= 6 else 10.0
     avg_jump = int(np.mean(jumps[-8:])) if len(jumps) >= 8 else 18
 
-    # 2. Puanlama (Gizli Komşulu Mantık)
+    # 2. Puanlama (Eski Düzen Dinamikleri)
     scores = {num: 0 for num in range(37)}
     for i, n in enumerate(reversed(hist[-15:])):
         decay = 100 / (1.15**i)
@@ -49,18 +48,24 @@ async def smart_engine_v5_1(uid):
             weight = 1.0 if d == 0 else 0.5
             scores[num] += decay * weight
 
-    # Repeat & Area Bonusu
-    scores[last_num] += 60
+    scores[last_num] += 70 # Repeat Bonusu
     for n in get_neighbors(last_num, 1): scores[n] += 30
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
-    # 3. GİZLİ KOMŞULU SİSTEM (Sadece 3 Odak Gösterir)
-    top_3_targets = [sorted_sc[0][0], sorted_sc[1][0], sorted_sc[2][0]]
-    all_bets = set()
-    for t in top_3_targets:
-        all_bets.update(get_neighbors(t, 2)) # Arka planda 5'li bloklar (2 komşu)
+    # 3. ANA VE EKSTRA HEDEFLER
+    main_targets = [sorted_sc[i][0] for i in range(3)]
+    extra_targets = [sorted_sc[i][0] for i in range(3, 6)]
     
+    all_bets = set()
+    for t in main_targets:
+        all_bets.update(get_neighbors(t, 2)) # Ana hedefler 2 komşulu
+    for t in extra_targets:
+        all_bets.update(get_neighbors(t, 1)) # Ekstra hedefler 1 komşulu
+    
+    # Repeat Koruması (Her zaman listede olsun)
+    all_bets.update(get_neighbors(last_num, 1))
+
     final_bets = sorted(list(all_bets))
     state["last_all_bets"] = final_bets
     bet_count = len(final_bets)
@@ -71,15 +76,15 @@ async def smart_engine_v5_1(uid):
     
     if chaos_factor > 16.0 or hit_rate < 0.2 or kasa_erime > 0.45:
         status, risk_percent = "🔴 LÜTFEN KALK!", 0.0
-        extra_msg = "🚨 Masa dengesi bozuldu, risk çok yüksek!"
+        extra_msg = "🚨 Masa dengesi bozuldu!"
     elif chaos_factor > 11.0:
         status, risk_percent = "🟡 SARI MOD", 0.04
-        extra_msg = "📉 Ritim belirsiz, izleyerek git."
+        extra_msg = "📉 Ritim belirsiz."
     else:
         status, risk_percent = "🟢 YEŞİL MOD", 0.09
-        extra_msg = "✅ Ritim stabil, kazanç serisi yakalanabilir."
+        extra_msg = "✅ Ritim stabil."
 
-    # Kademeli Artan Risk (Power-Up)
+    # Kazanç Artış (Power-Up)
     if status.startswith("🟢") and state["consecutive_wins"] > 0:
         risk_percent = min(0.20, risk_percent + (state["consecutive_wins"] * 0.05))
 
@@ -87,15 +92,15 @@ async def smart_engine_v5_1(uid):
     unit = max(math.floor(total_risk / bet_count), 1) if risk_percent > 0 else 0
     state["last_unit"] = unit
 
-    # SENİN İSTEDİĞİN TEMİZ GÖRÜNÜM
+    # TERTEMİZ GÖRÜNÜM
     msg = (
         f"📊 DURUM: {status}\n"
         f"🌀 KAOS: {chaos_factor:.1f} | 🎯 İSABET: {hit_rate:.1f}\n"
         f"💰 KASA: {state['bakiye']} | 🪙 UNIT: {state['last_unit']}\n"
-        f"🎯 RİSK: %{int(risk_percent*100)}\n"
-        f"🔄 SON SAYI: {last_num}\n\n"
-        f"🔥 ANA HEDEFLER: {top_3_targets}\n"
-        f"📏 ALAN: 3 Odak + 2'şer Komşu (Gizli)\n\n"
+        f"🎯 RİSK: %{int(risk_percent*100)}\n\n"
+        f"🔥 MAIN: {main_targets}\n"
+        f"➕ EXTRA: {extra_targets}\n\n"
+        f"🔄 SON SAYI: {last_num}\n"
         f"📢 {extra_msg}"
     )
     return msg
@@ -105,7 +110,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ GUARDIAN v5.1 SNIPER\n(Gizli Komşu Sistemi Aktif)", 
+    await update.message.reply_text("🛡️ GUARDIAN v5.2 LEGEND\n10 sayı girerek başla.", 
                                     reply_markup=ReplyKeyboardMarkup([['/reset']], resize_keyboard=True))
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -122,7 +127,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state["waiting_for_balance"]:
         state["bakiye"] = val; state["ana_kasa"] = val; state["waiting_for_balance"] = False; state["is_warmup_done"] = True
-        msg = await smart_engine_v5_1(uid); await update.message.reply_text(msg); return
+        msg = await smart_engine_v5_2(uid); await update.message.reply_text(msg); return
 
     if state["is_warmup_done"]:
         cost = len(state["last_all_bets"]) * state["last_unit"]
@@ -145,7 +150,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state["waiting_for_balance"] = True
         await update.message.reply_text("🎯 KASA GİRİN:"); return
     elif len(state["history"]) >= 10:
-        msg = await smart_engine_v5_1(uid); await update.message.reply_text(msg)
+        msg = await smart_engine_v5_2(uid); await update.message.reply_text(msg)
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
