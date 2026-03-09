@@ -17,19 +17,23 @@ def get_user_state(uid):
     if uid not in user_states:
         user_states[uid] = {
             "bakiye": 0, "ana_kasa": 0, "history": deque(maxlen=100), 
-            "hit_history": deque(maxlen=10), # Son 10 elin isabet kaydı
+            "hit_history": deque(maxlen=10),
             "last_all_bets": [], "consecutive_wins": 0, "consecutive_losses": 0,
             "is_warmup_done": False, "waiting_for_balance": False, "last_unit": 0
         }
     return user_states[uid]
 
-# --- ENGINE V5.0 GUARDIAN SHIELD ---
-async def smart_engine_v5_0(uid):
+def get_neighbors(n, s=2):
+    idx = WHEEL_MAP[n]
+    return [WHEEL[(idx + i) % 37] for i in range(-s, s + 1)]
+
+# --- ENGINE V5.1 TRIPLE HIT ---
+async def smart_engine_v5_1(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
     last_num = hist[-1]
     
-    # 1. Analiz Motoru (v4.3 Temelli)
+    # 1. Analiz Motoru
     jumps = [(WHEEL_MAP[hist[i]] - WHEEL_MAP[hist[i-1]] + 37) % 37 for i in range(1, len(hist))]
     chaos_factor = np.std(jumps[-6:]) if len(jumps) >= 6 else 10.0
     avg_jump = int(np.mean(jumps[-8:])) if len(jumps) >= 8 else 18
@@ -39,7 +43,6 @@ async def smart_engine_v5_0(uid):
     for i, n in enumerate(reversed(hist[-15:])):
         decay = 100 / (1.15**i)
         target_idx = (WHEEL_MAP[n] + avg_jump) % 37
-        # Gizli tarama: Merkeze 100, yanlara 50, uzaklara 20 puan
         for d in [-2, -1, 0, 1, 2]:
             num = WHEEL[(target_idx + d) % 37]
             weight = 1.0 if d == 0 else 0.5
@@ -47,14 +50,19 @@ async def smart_engine_v5_0(uid):
 
     # Tekrar Sayısı ve Yakın Bölge Bonusu (Repeat Sistemi)
     scores[last_num] += 60
-    for n in [WHEEL[(WHEEL_MAP[last_num]-1)%37], WHEEL[(WHEEL_MAP[last_num]+1)%37]]:
-        scores[n] += 30
+    for n in get_neighbors(last_num, 1): scores[n] += 30
 
     sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
     
-    # 3. Odaklanmış Gizli Komşu Seçimi (En güçlü 9-10 sayı)
-    final_bets = sorted(list(set([sorted_sc[i][0] for i in range(10)])))
+    # 3. ODAKLANMIŞ SİSTEM (3 Ana Hedef + 2 Komşu)
+    top_3_targets = [sorted_sc[0][0], sorted_sc[1][0], sorted_sc[2][0]]
+    all_bets = set()
+    for t in top_3_targets:
+        all_bets.update(get_neighbors(t, 2)) # 2 Komşulu Gizli Sistem
+    
+    final_bets = sorted(list(all_bets))
     state["last_all_bets"] = final_bets
+    bet_count = len(final_bets)
 
     # 4. KRİTİK UYARI VE DURDURMA SİSTEMİ
     hit_rate = sum(state["hit_history"]) / len(state["hit_history"]) if state["hit_history"] else 1.0
@@ -62,29 +70,30 @@ async def smart_engine_v5_0(uid):
     
     if chaos_factor > 16.0 or hit_rate < 0.2 or kasa_erime > 0.5:
         status, risk_percent = "🔴 LÜTFEN KALK! (Tehlike)", 0.0
-        extra_msg = "⚠️ Masa dengesi bozuldu veya isabet oranı çok düşük!"
+        extra_msg = "🚨 Masa dengesi bozuldu! Matematiksel kaos var."
     elif chaos_factor > 11.0:
         status, risk_percent = "🟡 SARI MOD (Temkinli)", 0.04
-        extra_msg = "📉 Ritim belirsiz, düşük bahis."
+        extra_msg = "📉 Ritim belirsiz, düşük bahisli takip."
     else:
         status, risk_percent = "🟢 YEŞİL MOD (Güvenli)", 0.09
-        extra_msg = "✅ Ritim stabil, oyuna devam."
+        extra_msg = "✅ Ritim stabil, kazanç serisi beklenebilir."
 
-    # Power-Up (Sadece Yeşil modda)
+    # Power-Up (Artan Kazanç Oranı)
     if status.startswith("🟢") and state["consecutive_wins"] > 0:
-        risk_percent = min(0.18, risk_percent + (state["consecutive_wins"] * 0.04))
+        risk_percent = min(0.20, risk_percent + (state["consecutive_wins"] * 0.05))
 
     total_risk = state["bakiye"] * risk_percent
-    unit = max(math.floor(total_risk / len(final_bets)), 1) if risk_percent > 0 else 0
+    unit = max(math.floor(total_risk / bet_count), 1) if risk_percent > 0 else 0
     state["last_unit"] = unit
 
     msg = (
         f"📊 DURUM: {status}\n"
         f"🌀 KAOS: {chaos_factor:.1f} | 🎯 İSABET: {hit_rate:.1f}\n"
         f"💰 KASA: {state['bakiye']} | 🪙 UNIT: {state['last_unit']}\n"
-        f"🎲 ADET: {len(final_bets)} | 🎯 RİSK: %{int(risk_percent*100)}\n"
+        f"🎲 ADET: {bet_count} | 🎯 RİSK: %{int(risk_percent*100)}\n"
         f"🔄 SON SAYI: {last_num}\n\n"
-        f"🔥 ODAK: {final_bets}\n"
+        f"🎯 ANA HEDEFLER: {top_3_targets}\n"
+        f"🔥 ODAK (Gizli Komşu): {final_bets}\n"
         f"📢 {extra_msg}"
     )
     return msg
@@ -94,7 +103,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ GUARDIAN v5.0 SHIELD\nAnaliz motoru aktif. 10 sayı girin.")
+    await update.message.reply_text("🛡️ GUARDIAN v5.1 TRIPLE HIT\nSniper motoru hazır. 10 sayı girin.")
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -110,7 +119,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state["waiting_for_balance"]:
         state["bakiye"] = val; state["ana_kasa"] = val; state["waiting_for_balance"] = False; state["is_warmup_done"] = True
-        msg = await smart_engine_v5_0(uid); await update.message.reply_text(msg); return
+        msg = await smart_engine_v5_1(uid); await update.message.reply_text(msg); return
 
     if state["is_warmup_done"]:
         cost = len(state["last_all_bets"]) * state["last_unit"]
@@ -126,14 +135,14 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ PAS. Sayı: {val}")
         else:
             state["hit_history"].append(0)
-            await update.message.reply_text(f"👁️ İZLEMEDE: {val}")
+            await update.message.reply_text(f"👁️ İZLEMEDE (Bahis Yok): {val}")
 
     state["history"].append(val)
     if len(state["history"]) == 10 and not state["is_warmup_done"]:
         state["waiting_for_balance"] = True
         await update.message.reply_text("🎯 KASA GİRİN:"); return
     elif len(state["history"]) >= 10:
-        msg = await smart_engine_v5_0(uid); await update.message.reply_text(msg)
+        msg = await smart_engine_v5_1(uid); await update.message.reply_text(msg)
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
