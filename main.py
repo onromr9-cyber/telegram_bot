@@ -205,12 +205,37 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if uid not in ADMIN_IDS: return
+    if uid not in ADMIN_IDS:
+        return
+    
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🛡️ PROFIT GUARDIAN v5.12\n5 Hit sonrası otomatik reset aktif.", reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True))
+    
+    # Yeni Şampiyon Karşılama Tasarımı
+    welcome_text = (
+        "🛡️ **𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍** 🛡️ 🎱🏆\n"
+        "───────────────────\n"
+        "🦉 **Gözetleme Modu Aktif**\n"
+        "Kasa Yönetimi ve Ritim Analizi Başlatıldı.\n\n"
+        "💎 **Sistem Durumu:**\n"
+        "• 🧠 v3 Zeka Motoru: [ONLINE]\n"
+        "• 🛡️ Safe Input: [AKTİF]\n"
+        "• 🛑 3 Pas Stop-Loss: [HAZIR]\n"
+        "• 🏆 Profit Lock: [%100]\n\n"
+        "🎯 **Giriş Bekleniyor:**\n"
+        "Lütfen masadan gelen ilk 10 sayıyı girerek\n"
+        "ısınma turunu başlatın.\n"
+        "───────────────────"
+    )
+    
+    await update.message.reply_text(
+        welcome_text, 
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True)
+    )
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
     app.run_polling()
+
