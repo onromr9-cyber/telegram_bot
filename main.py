@@ -68,7 +68,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0, "hit_streak": 0,
         "bankroll": 0, "waiting_bankroll": True, "watch_mode": False, "last_unit": 0
     }
-    await update.message.reply_text("🛡️ **𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v10.4**\nKasa girişi (10 sayı Sessiz Mod):")
+    await update.message.reply_text("🛡️ **𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v10.5**\nKasa girişi (10 sayı Sessiz Mod):")
 
 async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -76,30 +76,38 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     state = user_states[uid]
 
-    if not text.isdigit() and text not in ['🗑️ SIFIRLA', '↩️ GERİ AL']:
-        await update.message.reply_text("🚫 Sadece rakam!")
-        return
-
-    if state["waiting_bankroll"]:
-        state["bankroll"] = int(text)
-        state["waiting_bankroll"] = False
-        await update.message.reply_text(f"💰 Kasa `{state['bankroll']}` aktif.")
-        return
-
+    # --- GÜVENLİK FİLTRESİ ---
     if text == '🗑️ SIFIRLA': await start(update, context); return
     if text == '↩️ GERİ AL':
         if state["history"]: state["history"].pop(); await update.message.reply_text("⬅️ Geri alındı."); return
 
-    num = int(text)
+    if not text.isdigit():
+        await update.message.reply_text("⚠️ **HATA:** Lütfen sadece rakam girin!")
+        return
+    
+    val = int(text)
+    
+    # Kasa girişi değilse 0-36 kontrolü yap
+    if not state["waiting_bankroll"] and (val < 0 or val > 36):
+        await update.message.reply_text("⚠️ **HATA:** Rulet masasında 60 yoktur Patron! (0-36 arası girin)")
+        return
+    # -----------------------
 
-    # 1. İZLEME MODU VE RİTİM DÜZELME KONTROLÜ
+    if state["waiting_bankroll"]:
+        state["bankroll"] = val
+        state["waiting_bankroll"] = False
+        await update.message.reply_text(f"💰 Kasa `{state['bankroll']}` aktif.")
+        return
+
+    num = val
+
+    # 1. İZLEME MODU
     if state["watch_mode"]:
         state["history"].append(num)
         if state["last_full_list"] and num in state["last_full_list"]:
             state["watch_mode"] = False
             state["fail_count"] = 0
             state["hit_streak"] = 0
-            # Ritim düzeldiğinde anında yeni analiz üret
             data = get_analysis_data(uid, num)
             state["last_unit"] = calculate_risk_unit(state)
             state["last_full_list"] = data["full_list"]
@@ -107,7 +115,7 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(res, parse_mode="Markdown")
         return 
 
-    # 2. NORMAL LOSE / HIT HESAPLAMA
+    # 2. NORMAL LOSE / HIT
     if state["last_full_list"]:
         if num in state["last_full_list"]:
             profit = (state["last_unit"] * 36) - (state["last_unit"] * len(state["last_full_list"]))
@@ -122,13 +130,13 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state["fail_count"] += 1
             await update.message.reply_text(f"🔴 **𝐋𝐎𝐒𝐄! (-{loss})**\n💰 Kasa: `{state['bankroll']}`", parse_mode="Markdown")
 
-    # 3. RİTİM BOZULMA (3. LOSE)
+    # 3. RİTİM BOZULMA
     if state["fail_count"] >= 3:
         state["watch_mode"] = True
         await update.message.reply_text("🚨 **RİTİM BOZULDU!**\nSessiz izleme başladı. Bölge yakalanınca analiz gelecek.")
         return
 
-    # 4. NORMAL AKIŞ ANALİZİ
+    # 4. NORMAL AKIŞ
     state["history"].append(num)
     if len(state["history"]) >= 10:
         data = get_analysis_data(uid, num)
