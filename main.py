@@ -77,7 +77,13 @@ async def generate_analysis_msg(uid):
     
     # 3. EL GELMEZ KURULI: Son sayıyı listeden ayıkla
     if len(state["history"]) >= 2 and state["history"][-1] in all_bets_set:
-        all_bets_set.remove(state["history"][-1])
+    # SİLMEK YERİNE: Eğer son sayı pivotlardaysa tut, değilse zorla ekleme.
+    # Bu sayede momentum orayı işaret ediyorsa 'Repeat' yakalanır.
+    if len(state["history"]) >= 2:
+    last_val = state["history"][-1]
+    # Sadece kaos çok düşükse (ritim varsa) son sayıyı listede tut
+    if chaos < 10: 
+        all_bets_set.add(last_val)
 
     all_bets = list(all_bets_set)
 
@@ -162,3 +168,4 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, play))
     app.run_polling()
+
