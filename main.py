@@ -27,76 +27,80 @@ def get_neighbors(n, s=1):
     idx = WHEEL_MAP[n]
     return [WHEEL[(idx + i) % 37] for i in range(-s, s + 1)]
 
-def triple_chain_engine(uid):
+def sniper_v6_engine(uid):
     state = get_user_state(uid)
     hist = list(state["history"])
     
-    # 1. VEKTÖREL KAYMA (Momentum) ANALİZİ
-    # J1: Son atlama mesafesi, J2: Bir önceki atlama mesafesi
+    # 1. MOMENTUM ANALİZİ (Vektörel Kayma)
     j1, j2 = 0, 0
     if len(hist) >= 3:
         j1 = (WHEEL_MAP[hist[-1]] - WHEEL_MAP[hist[-2]] + 37) % 37
         j2 = (WHEEL_MAP[hist[-2]] - WHEEL_MAP[hist[-3]] + 37) % 37
 
-    # Chaos Factor: İvme değişimi (Düşükse ritim var, yüksekse kaos var)
     chaos = abs(j1 - j2)
     
-    # 2. ÜÇLÜ ZİNCİR TAHMİNİ (Pivot Noktaları)
-    # Pivot 1: Momentum Korunumu (Aynı hızla devam)
-    p1 = (WHEEL_MAP[hist[-1]] + j1) % 37
-    # Pivot 2: Ayna/Zıt Sıçrama (Counter-Jump)
-    p2 = (WHEEL_MAP[hist[-1]] + (37 - j1)) % 37
-    # Pivot 3: Aritmetik Ortalama (Yavaşlayan Momentum)
-    avg_j = int((j1 + j2) / 2)
-    p3 = (WHEEL_MAP[hist[-1]] + avg_j) % 37
-
-    # 3. NOKTA ATIŞI LİSTELEME
-    # Sadece S1 (Sağ-Sol 1) kullanarak alanı 9-14 sayıda tutuyoruz.
-    targets = {WHEEL[p1], WHEEL[p2], WHEEL[p3], hist[-1]} # hist[-1] Repeat koruması
+    # 2. PİVOT HESAPLAMA
+    p1 = (WHEEL_MAP[hist[-1]] + j1) % 37      # Devam ivmesi
+    p2 = (WHEEL_MAP[hist[-1]] + (37 - j1)) % 37 # Geri sekme (Counter)
+    mirror_idx = (WHEEL_MAP[hist[-1]] + 18) % 37 # Tam karşı bölge
     
-    return list(targets), chaos
+    pivots = {WHEEL[p1], WHEEL[p2], WHEEL[mirror_idx]}
+    
+    # 3. ANTI-REPEAT (DOYUM) FİLTRESİ
+    # Eğer son iki sayı aynıysa veya çok yakınsa (S1), o bölgeyi listeden çıkar.
+    if len(hist) >= 2 and abs(WHEEL_MAP[hist[-1]] - WHEEL_MAP[hist[-2]]) <= 1:
+        dead_zone = get_neighbors(hist[-1], 2) # Doymuş bölge (Geniş filtre)
+        pivots = {p for p in pivots if p not in dead_zone}
+        # Eğer tüm pivotlar silindiyse, sadece tam zıt tarafa (Ayna) odaklan
+        if not pivots:
+            pivots = {WHEEL[mirror_idx]}
+
+    return list(pivots), chaos
 
 async def generate_analysis_msg(uid):
     state = get_user_state(uid)
-    pivots, chaos = triple_chain_engine(uid)
+    pivots, chaos = sniper_v6_engine(uid)
     
-    # Hit Rate Kontrolü
+    # Hit Oranı (Son 5 El)
     last_5 = list(state["hit_history"])[-5:]
     hit_rate = sum(last_5) / 5 if len(last_5) >= 5 else 1.0
 
-    # Komşuluk oluşturma (Nokta Atışı için S1)
+    # Dar Komşuluk (Nokta Atışı için S1)
     all_bets_set = set()
     for p in pivots:
         all_bets_set.update(get_neighbors(p, 1))
     
+    # 3. El gelmez mantığı: Son sayıyı listeden kesin olarak çıkarıyoruz (Doyum)
+    if len(list(state["history"])) >= 2:
+        if state["history"][-1] in all_bets_set:
+            all_bets_set.remove(state["history"][-1])
+
     all_bets = list(all_bets_set)
 
-    # --- GUARDIAN RİSK KONTROLÜ ---
-    # Eğer kaos çok yüksekse (ivme sürekli değişiyorsa) veya hit rate yerlerdeyse:
-    if chaos > 20 or hit_rate < 0.2:
+    # --- SERT GUARDIAN FİLTRESİ ---
+    if chaos > 22 or hit_rate < 0.2:
         state["last_unit"] = 0
         state["last_all_bets"] = []
-        return (f"🛑 **LÜTFEN KALK! (RİTİM KOPTU)**\n"
+        return (f"🛑 **LÜTFEN KALK! (SNIPER KAPALI)**\n"
                 f"───────────────────\n"
-                f"⚠️ Kaos Katsayısı: {chaos}\n"
-                f"📉 Başarı Oranı: {hit_rate}\n"
-                f"📢 Top öngörülemez savruluyor. İZLE!")
+                f"⚠️ Kaos: {chaos} | Başarı: {hit_rate}\n"
+                f"📢 Masa analizi yapılamıyor. Matematik bozuldu.")
 
-    # Bakiye ve Unit Yönetimi (%7 Risk)
-    risk_rate = 0.07 if state["win_streak"] < 2 else 0.10
+    # Risk Yönetimi (%8 Kasa Kullanımı)
+    risk_rate = 0.08 if state["win_streak"] < 2 else 0.12
     risk_miktari = state["bakiye"] * risk_rate
     state["last_unit"] = max(math.floor(risk_miktari / len(all_bets)), 1)
     state["last_all_bets"] = all_bets
 
     return (
-        f"🎯 **TRIPLE CHAIN SNIPER**\n"
+        f"🎯 **SNIPER v6 (ANTI-REPEAT)**\n"
         f"💰 **KASA:** {state['bakiye']} | 🪙 **UNIT:** {state['last_unit']}\n"
         f"───────────────────\n"
-        f"🔥 **PIVOT NOKTALAR:** {pivots}\n"
-        f"🧩 **KAOS:** {chaos} | **KAPALI:** {len(all_bets)}\n"
+        f"🔥 **HEDEF NOKTALAR:** {pivots}\n"
+        f"🧩 **KAOS:** {chaos} | **SAYI:** {len(all_bets)}\n"
         f"───────────────────\n"
-        f"📢 Üçlü zincir ve momentum aktif.\n"
-        f"🚀 **HİT RATE:** {hit_rate}"
+        f"📈 **NET KAR HEDEFİ:** %20+\n"
+        f"📢 'Aynı sayı 3. kez gelmez' kuralı aktif."
     )
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -107,7 +111,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == '🗑️ SIFIRLA':
         if uid in user_states: del user_states[uid]
-        await update.message.reply_text("🛡️ SİSTEM SIFIRLANDI."); return
+        await update.message.reply_text("🛡️ SİSTEM BAŞTAN KURULDU."); return
     
     if text == '↩️ GERİ AL' and state["snapshot"]:
         state.update(state["snapshot"].pop()); await update.message.reply_text("↩️ Geri alındı."); return
@@ -115,7 +119,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text.isdigit(): return
     val = int(text)
 
-    # Snapshot Kaydı (Geri alma için)
+    # Snapshot
     snap = {k: (list(v) if isinstance(v, deque) else v) for k, v in state.items() if k != "snapshot"}
     state["snapshot"].append(snap)
 
@@ -148,7 +152,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = get_user_state(uid)
-    await update.message.reply_text("🦅 **TRIPLE CHAIN SNIPER v5**\nIsınma için 10 sayı girin...", parse_mode='Markdown', reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True))
+    await update.message.reply_text("🦅 **SNIPER v6: ANTI-REPEAT**\n10 sayı girerek motoru ateşleyin...", parse_mode='Markdown', reply_markup=ReplyKeyboardMarkup(KEYBOARD, resize_keyboard=True))
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
