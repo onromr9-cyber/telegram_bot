@@ -10,7 +10,7 @@ ADMIN_IDS = {5813833511, 1278793650}
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
 
-# --- ÖZEL STRATEJİ HARİTASI ---
+# --- SENİN STRATEJİ HARİTAN (YARDIMCI SİSTEM) ---
 STRATEGY_MAP = {
     0: [6,4,16], 1: [27,23,21], 2: [14,17,8], 3: [5,6,18], 4: [26,7,11], 5: [25,22,35], 
     6: [30,24,15], 7: [21,14,28], 8: [12,32,20], 9: [4,36,22], 10: [26,19,31], 
@@ -25,57 +25,59 @@ MAIN_KEYBOARD = [['🗑️ SIFIRLA', '↩️ GERİ AL']]
 REPLY_MARKUP = ReplyKeyboardMarkup(MAIN_KEYBOARD, resize_keyboard=True)
 
 user_states = collections.defaultdict(lambda: {
-    "history": deque(maxlen=30),
-    "last_full_list": [],
-    "fail_count": 0,
-    "hit_streak": 0,
-    "bankroll": 0,
-    "waiting_bankroll": True,
-    "watch_mode": False,
-    "last_unit": 0
+    "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0, "hit_streak": 0,
+    "bankroll": 0, "waiting_bankroll": True, "watch_mode": False, "last_unit": 0
 })
 
-# --- ANALİZ MOTORU (YENİLENMİŞ) ---
 def get_neighbors(num, n_range=2):
     idx = WHEEL_MAP[int(num)]
     return [WHEEL[(idx + i) % 37] for i in range(-n_range, n_range + 1)]
 
+def get_mirror(num):
+    return WHEEL[(WHEEL_MAP[num] + 18) % 37]
+
 def calculate_risk_unit(state):
     risk_percentages = [0.05, 0.08, 0.12, 0.15]
     idx = min(state["hit_streak"], len(risk_percentages) - 1)
-    unit = round((state["bankroll"] * risk_percentages[idx]) / 11)
+    # Yaklaşık 12-14 sayı kapatacağımız için birim miktarını kasanın durumuna göre ayarlar
+    unit = round((state["bankroll"] * risk_percentages[idx]) / 13)
     return max(unit, 1)
 
-def get_analysis_data(num):
-    # Senin strateji haritandaki 3 pivotu alıyoruz
-    pivots = STRATEGY_MAP.get(num, [num, num, num])
+def get_hybrid_analysis(num):
+    # 1. Matematiksel Gözlem (Ayna Pivotu ve ±2 Komşusu) -> 5 Sayı
+    mirror_pivot = get_mirror(num)
+    mathematical_core = set(get_neighbors(mirror_pivot, 2))
     
-    # Her pivotun ±1 komşusunu alıyoruz (Toplam 9 sayı yapar, dar ve net vuruş)
-    full_list = set()
-    for p in pivots:
-        full_list.update(get_neighbors(p, 1))
+    # 2. Strateji Haritası (Senin 3 Özel Sayın) -> 3 Sayı
+    strategy_pivots = STRATEGY_MAP.get(num, [])
     
-    return {"pivots": pivots, "full_list": list(full_list)}
+    # 3. Birleştirme (Matematiksel Bölge + Senin Stratejin)
+    full_list = mathematical_core.union(set(strategy_pivots))
+    
+    # Not: Eğer toplam sayı az kalırsa strateji sayılarına ufak komşu eklenebilir ama şu an "saf" birleşim yapıyoruz.
+    return {
+        "mirror": mirror_pivot,
+        "strategy": strategy_pivots,
+        "full_list": list(full_list)
+    }
 
-async def format_analysis_msg(state, num, data, title="🎯 ANALİZ PANELİ"):
+async def format_analysis_msg(state, num, data, title="🎯 HİBRİT ANALİZ"):
     total_risk = state["last_unit"] * len(data["full_list"])
     separator = "━" * 15
     res = f"{title}\n{separator}\n"
-    res += f"📍 SON: {num}\n\n"
-    res += f"🔥 ANA HEDEF: {data['pivots'][0]}\n"
-    res += f"🌀 DESTEK 1: {data['pivots'][1]}\n"
-    res += f"🌀 DESTEK 2: {data['pivots'][2]}\n\n"
+    res += f"📍 SON: {num} | AYNA: {data['mirror']}\n\n"
+    res += f"🔥 STRATEJİ: {', '.join(map(str, data['strategy']))}\n"
+    res += f"🌀 BÖLGE: {len(data['full_list'])} Rakam Aktif\n\n"
     res += f"{separator}\n📊 Unit: {state['last_unit']} | Risk: {total_risk}\n💰 Kasa: {state['bankroll']}"
     return res
 
-# --- HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS: return
     user_states[update.effective_user.id] = {
         "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0, "hit_streak": 0,
         "bankroll": 0, "waiting_bankroll": True, "watch_mode": False, "last_unit": 0
     }
-    await update.message.reply_text("GUARDIAN v11.0\nKasa girişini yapın:", reply_markup=REPLY_MARKUP)
+    await update.message.reply_text("GUARDIAN v11.1\nKasa girişini yapın:", reply_markup=REPLY_MARKUP)
 
 async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -104,21 +106,20 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     num = val
 
-    # 1. İZLEME MODU
+    # İZLEME MODU
     if state["watch_mode"]:
         state["history"].append(num)
         if state["last_full_list"] and num in state["last_full_list"]:
             state["watch_mode"] = False
             state["fail_count"] = 0
-            state["hit_streak"] = 0
-            data = get_analysis_data(num)
+            data = get_hybrid_analysis(num)
             state["last_unit"] = calculate_risk_unit(state)
             state["last_full_list"] = data["full_list"]
-            res = await format_analysis_msg(state, num, data, title="🟢 RİTİM DÜZELDİ! ŞİMDİ GİR!")
+            res = await format_analysis_msg(state, num, data, title="🟢 RİTİM DÜZELDİ!")
             await update.message.reply_text(res)
         return 
 
-    # 2. NORMAL LOSE / HIT
+    # HIT / LOSE
     if state["last_full_list"]:
         if num in state["last_full_list"]:
             profit = (state["last_unit"] * 36) - (state["last_unit"] * len(state["last_full_list"]))
@@ -133,16 +134,15 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state["fail_count"] += 1
             await update.message.reply_text(f"🔴 LOSE! (-{loss})\nKasa: {state['bankroll']}")
 
-    # 3. RİTİM BOZULMA
     if state["fail_count"] >= 3:
         state["watch_mode"] = True
         await update.message.reply_text("🚨 RİTİM BOZULDU!\nSessiz izleme başladı.")
         return
 
-    # 4. NORMAL AKIŞ (SENİN HARİTANLA)
+    # ANALİZ AKIŞI
     state["history"].append(num)
     if len(state["history"]) >= 10:
-        data = get_analysis_data(num)
+        data = get_hybrid_analysis(num)
         state["last_unit"] = calculate_risk_unit(state)
         state["last_full_list"] = data["full_list"]
         res = await format_analysis_msg(state, num, data)
