@@ -10,6 +10,7 @@ ADMIN_IDS = {5813833511, 1278793650}
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
 
+# Güncellenmiş Strateji Haritası (8: [25,32,20] eklendi)
 STRATEGY_MAP = {
     0: [6,4,16], 1: [27,23,21], 2: [14,17,8], 3: [5,6,18], 4: [26,7,11], 5: [25,22,35], 
     6: [30,24,15], 7: [21,14,28], 8: [25,32,20], 9: [4,36,22], 10: [26,19,31], 
@@ -28,7 +29,7 @@ user_states = collections.defaultdict(lambda: {
     "bankroll": 0, "waiting_bankroll": True, "watch_mode": False, "last_unit": 0
 })
 
-def get_neighbors(num, n_range=2):
+def get_neighbors(num, n_range=1):
     idx = WHEEL_MAP[int(num)]
     return [WHEEL[(idx + i) % 37] for i in range(-n_range, n_range + 1)]
 
@@ -41,37 +42,32 @@ def calculate_risk_unit(state, list_len):
     unit = round((state["bankroll"] * risk_percentages[idx]) / list_len)
     return max(unit, 1)
 
-def get_hybrid_analysis(num):
-    # AYNA (s2)
+def get_sniper_hybrid_2(num):
+    # 1. AYNA (s2) - %40 Ağırlık
     mirror_pivot = get_mirror(num)
     m_list = set(get_neighbors(mirror_pivot, 2))
     
-    # STRATEJİ (s1)
-    s_pivots = STRATEGY_MAP.get(num, [])
-    s_list = set()
-    for p in s_pivots:
-        s_list.update(get_neighbors(p, 1))
+    # 2. CROSS-WHEEL JUMP (90 Derece) - %30 Ağırlık
+    jump_1 = WHEEL[(WHEEL_MAP[num] + 9) % 37]
+    jump_2 = WHEEL[(WHEEL_MAP[num] - 9) % 37]
+    j_list = {jump_1, jump_2}
     
-    full_list = m_list.union(s_list)
-    return {
-        "mirror": mirror_pivot,
-        "strategy": s_pivots,
-        "full_list": list(full_list)
-    }
+    # 3. GÜNCEL STRATEJİ (s0 - Nokta Atışı) - %30 Ağırlık
+    s_pivots = STRATEGY_MAP.get(num, [])
+    
+    full_list = m_list.union(j_list).union(set(s_pivots))
+    return {"mirror": mirror_pivot, "jumps": [jump_1, jump_2], "strategy": s_pivots, "full_list": list(full_list)}
 
-async def format_analysis_msg(state, num, data, title="🎯 HİBRİT ANALİZ"):
+async def format_analysis_msg(state, num, data, title="🎯 SNIPER HYBRID 2.0"):
     total_nums = len(data["full_list"])
     total_risk = state["last_unit"] * total_nums
     separator = "━" * 15
-    
-    res = f"{title}\n{separator}\n"
-    res += f"📍 SON: {num}\n\n"
+    res = f"{title}\n{separator}\n📍 SON: {num}\n\n"
     res += f"🔄 AYNA: {data['mirror']} (s2)\n"
-    res += f"🔥 STRATEJİ: {', '.join(map(str, data['strategy']))} (s1)\n\n"
-    res += f"{separator}\n"
-    res += f"🎲 TOPLAM: {total_nums} Rakam\n"
-    res += f"📊 UNIT: {state['last_unit']} | RISK: {total_risk}\n"
-    res += f"💰 KASA: {state['bankroll']}"
+    res += f"🚀 JUMP: {', '.join(map(str, data['jumps']))}\n"
+    res += f"🛡️ DESTEK: {', '.join(map(str, data['strategy']))}\n\n"
+    res += f"{separator}\n🎲 TOPLAM: {total_nums} Rakam\n"
+    res += f"📊 UNIT: {state['last_unit']} | RISK: {total_risk}\n💰 KASA: {state['bankroll']}"
     return res
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -80,7 +76,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0, "hit_streak": 0,
         "bankroll": 0, "waiting_bankroll": True, "watch_mode": False, "last_unit": 0
     }
-    await update.message.reply_text("GUARDIAN v11.2\nKasa girişini yapın:", reply_markup=REPLY_MARKUP)
+    await update.message.reply_text("GUARDIAN v12.1\nKasa girişini yapın:", reply_markup=REPLY_MARKUP)
 
 async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -114,7 +110,7 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if state["last_full_list"] and num in state["last_full_list"]:
             state["watch_mode"] = False
             state["fail_count"] = 0
-            data = get_hybrid_analysis(num)
+            data = get_sniper_hybrid_2(num)
             state["last_unit"] = calculate_risk_unit(state, len(data["full_list"]))
             state["last_full_list"] = data["full_list"]
             res = await format_analysis_msg(state, num, data, title="🟢 RİTİM DÜZELDİ!")
@@ -142,7 +138,7 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     state["history"].append(num)
     if len(state["history"]) >= 10:
-        data = get_hybrid_analysis(num)
+        data = get_sniper_hybrid_2(num)
         state["last_unit"] = calculate_risk_unit(state, len(data["full_list"]))
         state["last_full_list"] = data["full_list"]
         res = await format_analysis_msg(state, num, data)
@@ -153,4 +149,3 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_input))
     app.run_polling()
-
