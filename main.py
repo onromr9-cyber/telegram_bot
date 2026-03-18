@@ -1,6 +1,6 @@
 import os, collections
 from collections import deque
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # --- AYARLAR ---
@@ -9,6 +9,10 @@ ADMIN_IDS = {5813833511, 1278793650}
 
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
+
+# --- BUTON MENÜSÜ ---
+MAIN_KEYBOARD = [['🗑️ SIFIRLA', '↩️ GERİ AL']]
+REPLY_MARKUP = ReplyKeyboardMarkup(MAIN_KEYBOARD, resize_keyboard=True)
 
 user_states = collections.defaultdict(lambda: {
     "history": deque(maxlen=30),
@@ -37,7 +41,6 @@ def calculate_risk_unit(state):
 
 def get_analysis_data(uid, num):
     state = user_states[uid]
-    hist = list(state["history"])
     p_main = num
     p_mirror = get_mirror(num)
     p_extra = WHEEL[(WHEEL_MAP[num] + 9) % 37]
@@ -50,9 +53,7 @@ def get_analysis_data(uid, num):
 
 async def format_analysis_msg(state, num, data, title="🎯 ANALİZ PANELİ"):
     total_risk = state["last_unit"] * len(data["full_list"])
-    # Sade görsel dokunuş: Estetik ayırıcı çizgi
     separator = "━" * 15
-    
     res = f"{title}\n{separator}\n"
     res += f"📍 SON: {num}\n\n"
     res += f"🔥 ANA PİVOT: {data['pivots']['ANA']} (±2)\n"
@@ -68,7 +69,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0, "hit_streak": 0,
         "bankroll": 0, "waiting_bankroll": True, "watch_mode": False, "last_unit": 0
     }
-    await update.message.reply_text("GUARDIAN v10.7\nKasa girişini yapın:")
+    await update.message.reply_text("GUARDIAN v10.8\nKasa girişini yapın:", reply_markup=REPLY_MARKUP)
 
 async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -76,7 +77,16 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     state = user_states[uid]
 
-    if text == '/start': await start(update, context); return
+    if text == '/start' or text == '🗑️ SIFIRLA': 
+        await start(update, context)
+        return
+
+    if text == '↩️ GERİ AL':
+        if state["history"]:
+            state["history"].pop()
+            state["last_full_list"] = [] # Önceki analizi temizle ki yanlış hesap yapmasın
+            await update.message.reply_text("↩️ Son sayı geri alındı.")
+        return
 
     if not text.isdigit():
         await update.message.reply_text("lütfen rakam girin")
@@ -91,7 +101,7 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state["waiting_bankroll"]:
         state["bankroll"] = val
         state["waiting_bankroll"] = False
-        await update.message.reply_text(f"💰 Kasa {state['bankroll']} aktif.")
+        await update.message.reply_text(f"💰 Kasa {state['bankroll']} aktif.", reply_markup=REPLY_MARKUP)
         return
 
     num = val
