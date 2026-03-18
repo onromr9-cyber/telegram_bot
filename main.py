@@ -14,16 +14,19 @@ MAIN_KEYBOARD = [['🗑️ SIFIRLA', '↩️ GERİ AL']]
 # Kullanıcı Veri Deposu
 user_states = collections.defaultdict(lambda: {
     "history": deque(maxlen=30),
-    "last_prediction": [],
+    "last_full_list": [],
+    "fail_count": 0,
     "bankroll": 0,
-    "waiting_bankroll": True,
-    "data_ready": False
+    "waiting_bankroll": True
 })
 
-# --- YARDIMCI FONKSİYONLAR ---
+# --- ANALİZ MOTORU ---
 def get_neighbors(num, n_range=2):
     idx = WHEEL_MAP[int(num)]
     return [WHEEL[(idx + i) % 37] for i in range(-n_range, n_range + 1)]
+
+def get_mirror(num):
+    return WHEEL[(WHEEL_MAP[num] + 18) % 37]
 
 def get_sector(num):
     idx = WHEEL_MAP[num]
@@ -31,32 +34,36 @@ def get_sector(num):
     if idx in [33, 1, 20, 14, 31, 9, 22, 18]: return "ORPHELINS"
     return "TIER"
 
-async def generate_prediction(uid, num, mode="MOMENTUM"):
+async def generate_pivot_prediction(uid, num, mode="MOMENTUM"):
     state = user_states[uid]
     hist = list(state["history"])
-    main_bets = set(get_neighbors(num, 2))
+    
+    pivot_main = num
+    full_list = set(get_neighbors(pivot_main, 2))
+    
+    pivot_mirror = get_mirror(num)
+    full_list.update(get_neighbors(pivot_mirror, 1))
+    
     if mode == "OFFSET" and len(hist) > 1:
-        main_bets.update(get_neighbors(hist[-2], 1))
-    mirror = WHEEL[(WHEEL_MAP[num] + 18) % 37]
-    extra = set(get_neighbors(mirror, 1))
-    extra.add(num)
-    final = sorted(list(main_bets | extra))[:9]
-    state["last_prediction"] = final
-    return final
+        pivot_extra = hist[-2]
+    else:
+        pivot_extra = WHEEL[(WHEEL_MAP[num] + 9) % 37]
+        
+    full_list.update(get_neighbors(pivot_extra, 1))
+    state["last_full_list"] = list(full_list)
+    
+    msg = f"🎯 **𝐒İ𝐍𝐘𝐀𝐋 𝐀𝐍𝐀𝐋İ𝐙İ (v9.7)**\n📍 SON: {num}\n\n"
+    msg += f"🔥 **ANA PİVOT:** `{pivot_main}` (±2 Komşu)\n"
+    msg += f"💎 **EKSTRA 1:** `{pivot_mirror}` (±1 Komşu)\n"
+    msg += f"💎 **EKSTRA 2:** `{pivot_extra}` (±1 Komşu)\n\n"
+    msg += f"📢 Mod: {mode} | 🛡️ Güvenli"
+    return msg
 
-# --- TELEGRAM HANDLERS ---
-
+# --- HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS: return
-    uid = update.effective_user.id
-    user_states[uid] = {
-        "history": deque(maxlen=30),
-        "last_prediction": [],
-        "bankroll": 0,
-        "waiting_bankroll": True,
-        "data_ready": False
-    }
-    await update.message.reply_text("🛡️ **𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v9.5 BAŞLADI**\nLütfen kasanızı girin (Örn: 10000):")
+    user_states[update.effective_user.id] = {"history": deque(maxlen=30), "last_full_list": [], "fail_count": 0, "bankroll": 0, "waiting_bankroll": True}
+    await update.message.reply_text("🛡️ **𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v9.7**\nLütfen kasanızı girin:")
 
 async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -64,66 +71,54 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     state = user_states[uid]
 
-    # --- GENEL GİRİŞ DENETİMİ (VALIDATION) ---
-    if text not in ['🗑️ SIFIRLA', '↩️ GERİ AL']:
-        if not text.isdigit():
-            await update.message.reply_text("🚫 **HATA:** Sadece rakam giriniz! Harf veya sembol kullanamazsınız.")
-            return
-        
-        val = int(text)
-        # Kasa girişi değilse 36 kontrolü yap
-        if not state["waiting_bankroll"] and (val < 0 or val > 36):
-            await update.message.reply_text("🚫 **HATA:** Geçersiz sayı! Rulette sadece 0-36 arası rakamlar bulunur.")
-            return
+    if not text.isdigit() and text not in ['🗑️ SIFIRLA', '↩️ GERİ AL']:
+        await update.message.reply_text("🚫 Sadece rakam!")
+        return
 
-    # Kasa Girişi İşleme
     if state["waiting_bankroll"]:
         state["bankroll"] = int(text)
         state["waiting_bankroll"] = False
-        await update.message.reply_text(f"💰 Kasa **{state['bankroll']}** birim olarak mühürlendi.\nŞimdi ilk 10 sayıyı girin (Veri toplama aşaması).",
-                                       reply_markup=ReplyKeyboardMarkup(MAIN_KEYBOARD, resize_keyboard=True))
+        await update.message.reply_text(f"💰 Kasa: {state['bankroll']}\nİlk 10 sayıyı girin (Veri toplama).", reply_markup=ReplyKeyboardMarkup(MAIN_KEYBOARD, resize_keyboard=True))
         return
 
-    if text == '🗑️ SIFIRLA':
-        await start(update, context)
-        return
-
-    if text == '↩️ GERİ AL':
-        if state["history"]:
-            state["history"].pop()
-            await update.message.reply_text("⬅️ Son sayı silindi.")
-        return
-
-    # Sayı İşleme
+    if text == '🗑️ SIFIRLA': await start(update, context); return
     num = int(text)
     
-    # 1. Veri Toplama (İlk 10 Sayı)
-    if len(state["history"]) < 10:
-        state["history"].append(num)
-        remaining = 10 - len(state["history"])
-        if remaining > 0:
-            await update.message.reply_text(f"📥 Veri Toplanıyor: {len(state['history'])}/10\nKalan: {remaining} sayı.")
+    # LOSE KONTROLÜ
+    if state["last_full_list"] and num not in state["last_full_list"] and len(state["history"]) >= 10:
+        state["fail_count"] += 1
+        
+        # 3. EL KAYIP KRİZİ
+        if state["fail_count"] >= 3:
+            current_sec = get_sector(num)
+            prev_sec = get_sector(state["history"][-1])
+            
+            keyboard = [[InlineKeyboardButton("🌀 OFFSET'e Geç", callback_data='p_off')],
+                        [InlineKeyboardButton("🎯 MOMENTUM'da Kal", callback_data='p_mom')]]
+            
+            await update.message.reply_text(
+                f"🚨 **KRİTİK DURUM (3/3 LOSE)!**\n"
+                f"Patron, masa ritmi çok bozdu. Son sayı {num} ({current_sec}).\n\n"
+                f"🧠 **BENİM FİKRİM:** Şu an top {prev_sec} bölgesine dönmek istiyor olabilir, **OFFSET** denemek mantıklı.\n\n"
+                f"Sen ne yapmak istersin?",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            context.user_data['pending_num'] = num
+            return
         else:
-            state["data_ready"] = True
-            await update.message.reply_text("✅ Veri toplama bitti! Bot artık aktif tahmin üretecek.")
-        return
+            # 3. el değilse sessizce kaydet ve yeni tahmin ver
+            await update.message.reply_text(f"❌ Iska ({state['fail_count']}/3). Analiz güncelleniyor...")
+    else:
+        # HİT durumunda sayacı sıfırla
+        if state["last_full_list"]:
+            state["fail_count"] = 0
 
-    # 2. Lose Kontrolü
-    if state["last_prediction"] and num not in state["last_prediction"]:
-        current_sec = get_sector(num)
-        prev_sec = get_sector(state["history"][-1])
-        keyboard = [[InlineKeyboardButton(f"🌀 OFFSET ({prev_sec})", callback_data='mode_off')],
-                    [InlineKeyboardButton(f"🎯 MOMENTUM ({current_sec})", callback_data='mode_mom')],
-                    [InlineKeyboardButton("🛡️ İZLE", callback_data='mode_watch')]]
-        await update.message.reply_text(f"⚠️ **LOSE!** Sayı: {num} ({current_sec})\nHangi stratejiyi uygulayalım Patron?",
-                                       reply_markup=InlineKeyboardMarkup(keyboard))
-        context.user_data['pending_num'] = num
-        return
-
-    # 3. Hit / Otomatik Tahmin
     state["history"].append(num)
-    final = await generate_prediction(uid, num)
-    await update.message.reply_text(f"✅ **ANALİZ**\n📍 SON: {num}\n🎯 **BAHİS:** `{', '.join(map(str, final))}`", parse_mode="Markdown")
+    if len(state["history"]) < 10:
+        await update.message.reply_text(f"📥 Veri: {len(state['history'])}/10")
+    else:
+        res = await generate_pivot_prediction(uid, num)
+        await update.message.reply_text(res, parse_mode="Markdown")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -133,10 +128,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     num = context.user_data.get('pending_num')
     state = user_states[uid]
     state["history"].append(num)
+    state["fail_count"] = 0 # Karar verildiği için sıfırla
     
-    mode = "OFFSET" if query.data == 'mode_off' else "MOMENTUM"
-    final = await generate_prediction(uid, num, mode=mode)
-    await query.edit_message_text(f"🕹️ **KARAR: {mode}**\n📍 SON: {num}\n🎯 **BAHİS:** `{', '.join(map(str, final))}`", parse_mode="Markdown")
+    mode = "OFFSET" if query.data == 'p_off' else "MOMENTUM"
+    res = await generate_pivot_prediction(uid, num, mode=mode)
+    await query.edit_message_text(f"🕹️ **KARAR UYGULANDI: {mode}**\n{res}", parse_mode="Markdown")
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
