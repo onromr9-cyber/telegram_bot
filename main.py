@@ -35,7 +35,6 @@ def get_mirror(num):
 def calculate_risk_unit(state):
     risk_percentages = [0.05, 0.08, 0.12, 0.15]
     idx = min(state["hit_streak"], len(risk_percentages) - 1)
-    # 11 sayı üzerinden unit hesabı
     unit = round((state["bankroll"] * risk_percentages[idx]) / 11)
     return max(unit, 1)
 
@@ -44,22 +43,24 @@ def get_analysis_data(uid, num, mode="MOMENTUM"):
     hist = list(state["history"])
     p_main = num
     p_mirror = get_mirror(num)
+    # n-2 mantığı (Gecikmeli)
     p_extra = hist[-2] if mode == "OFFSET" and len(hist) > 1 else WHEEL[(WHEEL_MAP[num] + 9) % 37]
     
-    full_list = set(get_neighbors(p_main, 2)) # 5 sayı
-    full_list.update(get_neighbors(p_mirror, 1)) # 3 sayı
-    full_list.update(get_neighbors(p_extra, 1)) # 3 sayı
+    full_list = set(get_neighbors(p_main, 2))
+    full_list.update(get_neighbors(p_mirror, 1))
+    full_list.update(get_neighbors(p_extra, 1))
     
     return {"pivots": {"ANA": p_main, "MIRROR": p_mirror, "EXTRA": p_extra}, "full_list": list(full_list)}
 
 # --- HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS: return
-    user_states[update.effective_user.id] = {
+    uid = update.effective_user.id
+    user_states[uid] = {
         "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0, "hit_streak": 0,
         "bankroll": 0, "waiting_bankroll": True, "watch_mode": False, "critical_state": False, "last_unit": 0, "last_pivots": {}
     }
-    await update.message.reply_text("🛡️ **𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v10.1**\nKasa girişini yapın:")
+    await update.message.reply_text("🛡️ **𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v10.2**\nKasa girişini yapın (Giriş sonrası 10 sayı SESSİZ MOD):")
 
 async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -74,24 +75,29 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state["waiting_bankroll"]:
         state["bankroll"] = int(text)
         state["waiting_bankroll"] = False
-        await update.message.reply_text(f"💰 Kasa {state['bankroll']} kaydedildi. 10 sayı girişi bekleniyor...")
+        await update.message.reply_text(f"💰 Kasa `{state['bankroll']}` kaydedildi. 10 sayıyı girin, 11. sayıda analiz başlayacak.", parse_mode="Markdown")
         return
 
     if text == '🗑️ SIFIRLA': await start(update, context); return
+    
+    if text == '↩️ GERİ AL':
+        if state["history"]:
+            state["history"].pop()
+            await update.message.reply_text("⬅️ Son sayı silindi.")
+        return
+
     num = int(text)
 
-    # İZLEME MODU
+    # İZLEME MODU (Watch Mode)
     if state["watch_mode"]:
         state["history"].append(num)
         if state["last_full_list"] and num in state["last_full_list"]:
             state["watch_mode"] = False
             state["fail_count"] = 0
-            await update.message.reply_text(f"🟢 **RİTİM YAKALANDI!**\nSon sayı {num} bölgeye girdi. Masa güvenli, ŞİMDİ GİR!")
-        else:
-            await update.message.reply_text(f"👀 İzleniyor: {num}... Beklemede kal.")
-        return
+            await update.message.reply_text(f"🟢 **RİTİM YAKALANDI!**\nSon sayı `{num}` bölgeye girdi. Masa güvenli, ŞİMDİ GİR!", parse_mode="Markdown")
+        return # İzleme modundayken analiz vermez, sadece bekler.
 
-    # LOSE / HIT / VISUAL PANEL
+    # LOSE / HIT / PANEL GÜNCELLEME
     if state["last_full_list"]:
         if num in state["last_full_list"]:
             profit = (state["last_unit"] * 36) - (state["last_unit"] * len(state["last_full_list"]))
@@ -99,15 +105,15 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state["hit_streak"] += 1
             state["fail_count"] = 0
             state["critical_state"] = False
-            await update.message.reply_text(f"🟢 **𝐇İ𝐓!**\n━━━━━━━━━━━━━\n➕ Kazanç: `{profit}`\n💰 Güncel Kasa: `{state['bankroll']}`\n🔥 Seri: `{state['hit_streak']}`")
+            await update.message.reply_text(f"🟢 **𝐇İ𝐓!**\n➕ Kazanç: `{profit}`\n💰 Kasa: `{state['bankroll']}`\n🔥 Seri: `{state['hit_streak']}`", parse_mode="Markdown")
         else:
             loss = (state["last_unit"] * len(state["last_full_list"]))
             state["bankroll"] -= loss
             state["hit_streak"] = 0
             state["fail_count"] += 1
-            await update.message.reply_text(f"🔴 **𝐋𝐎𝐒𝐄!**\n━━━━━━━━━━━━━\n➖ Kayıp: `{loss}`\n💰 Güncel Kasa: `{state['bankroll']}`\n📉 Seri Sıfırlandı.")
+            await update.message.reply_text(f"🔴 **𝐋𝐎𝐒𝐄!**\n➖ Kayıp: `{loss}`\n💰 Kasa: `{state['bankroll']}`", parse_mode="Markdown")
 
-    # KRİTİK ANALİZ (2 EL LOSE)
+    # KRİTİK ANALİZ (2 EL LOSE SONRASI)
     if state["fail_count"] == 2 and not state["critical_state"]:
         state["critical_state"] = True
         data = get_analysis_data(uid, num)
@@ -118,11 +124,10 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     [InlineKeyboardButton("⏸️ BEKLE", callback_data='c_wait')]]
         
         msg = f"⚠️ **KRİTİK ANALİZ (2/2)**\n━━━━━━━━━━━━━\n"
-        msg += f"🧠 **ÖNERİLEN RAKAMLAR:**\n"
-        msg += f"📍 ANA: `{data['pivots']['ANA']}` (±2)\n"
+        msg += f"📍 ANA PİVOT: `{data['pivots']['ANA']}` (±2)\n"
         msg += f"📍 AYNA: `{data['pivots']['MIRROR']}` (±1)\n"
         msg += f"📍 EXTRA: `{data['pivots']['EXTRA']}` (±1)\n\n"
-        msg += f"Masa dengesi bozuluyor. Kararın nedir?"
+        msg += f"Denge bozuldu. Bu rakamlarla devam mı?"
         
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         context.user_data['pending_num'] = num
@@ -130,11 +135,12 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state["fail_count"] >= 3:
         state["watch_mode"] = True
-        await update.message.reply_text("🚨 **RİTİM BOZULDU!**\nİzleme moduna geçildi. 'GÜVENLİ' sinyalini bekle.")
+        await update.message.reply_text("🚨 **RİTİM BOZULDU!**\nSessiz izleme moduna geçildi. Rakam girmeye devam et, bölgeye oturunca haber vereceğim.")
         return
 
-    # VERİ İŞLEME VE ANALİZ (10. Sayıdan Sonra Başlar)
+    # VERİ TOPLAMA (İLK 10 SAYI SESSİZ)
     state["history"].append(num)
+    
     if len(state["history"]) >= 10:
         data = get_analysis_data(uid, num)
         state["last_unit"] = calculate_risk_unit(state)
@@ -143,20 +149,15 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         res = f"🎯 **𝐀𝐍𝐀𝐋İ𝐙 PANELİ**\n━━━━━━━━━━━━━\n"
         res += f"📍 SON: `{num}`\n\n"
-        res += f"🔥 **ANA PİVOT:** `{data['pivots']['ANA']}`\n"
-        res += f"   └─ *Komşu: ±2 (Toplam 5)*\n"
-        res += f"💎 **AYNA:** `{data['pivots']['MIRROR']}`\n"
-        res += f"   └─ *Komşu: ±1 (Toplam 3)*\n"
-        res += f"💎 **EXTRA:** `{data['pivots']['EXTRA']}`\n"
-        res += f"   └─ *Komşu: ±1 (Toplam 3)*\n\n"
-        res += f"📊 **BAHİS DETAYI:**\n"
-        res += f"🪙 Sayı Başı Unit: `{state['last_unit']}`\n"
-        res += f"📉 Toplam Risk: `{total_risk}`\n"
-        res += f"💰 Kasa: `{state['bankroll']}`"
+        res += f"🔥 **ANA PİVOT:** `{data['pivots']['ANA']}` (±2)\n"
+        res += f"💎 **AYNA:** `{data['pivots']['MIRROR']}` (±1)\n"
+        res += f"💎 **EXTRA:** `{data['pivots']['EXTRA']}` (±1)\n\n"
+        res += f"📊 **DETAYLAR:**\n"
+        res += f"🪙 Unit/Sayı: `{state['last_unit']}`\n"
+        res += f"📉 Risk: `{total_risk}` | 💰 Kasa: `{state['bankroll']}`"
         await update.message.reply_text(res, parse_mode="Markdown")
-    else:
-        await update.message.reply_text(f"📥 Veri Toplanıyor: {len(state['history'])}/10")
 
+# --- CALLBACK ---
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid = update.effective_user.id
@@ -167,15 +168,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == 'c_cont':
         state["history"].append(num)
         state["last_unit"] = calculate_risk_unit(state)
-        total_risk = state["last_unit"] * 11
-        res = f"🚀 **DEVAM EDİLİYOR**\n━━━━━━━━━━━━━\n"
-        res += f"📍 PİVOTLAR: `{state['last_pivots']['ANA']}`, `{state['last_pivots']['MIRROR']}`, `{state['last_pivots']['EXTRA']}`\n"
-        res += f"📊 Basılacak Unit: `{state['last_unit']}`\n"
-        res += f"📉 Toplam Risk: `{total_risk}`"
+        res = f"🚀 **DEVAM: ANALİZ AKTİF**\n📍 PİVOTLAR: `{state['last_pivots']['ANA']}`, `{state['last_pivots']['MIRROR']}`, `{state['last_pivots']['EXTRA']}`\n📊 Unit: `{state['last_unit']}`"
         await query.edit_message_text(res, parse_mode="Markdown")
     elif query.data == 'c_wait':
         state["hit_streak"] = 0
-        await query.edit_message_text("⏸️ **PAS GEÇİLDİ.** Yeni sayıyı bekliyorum.")
+        await query.edit_message_text("⏸️ **BEKLEMEDE.** Yeni sayı girilince analiz yenilenecek.")
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
