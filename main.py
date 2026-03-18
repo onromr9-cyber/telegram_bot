@@ -1,6 +1,6 @@
 import os, collections
 from collections import deque
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # --- AYARLAR ---
@@ -9,7 +9,6 @@ ADMIN_IDS = {5813833511, 1278793650}
 
 WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 WHEEL_MAP = {num: i for i, num in enumerate(WHEEL)}
-MAIN_KEYBOARD = [['🗑️ SIFIRLA', '↩️ GERİ AL']]
 
 user_states = collections.defaultdict(lambda: {
     "history": deque(maxlen=30),
@@ -49,16 +48,15 @@ def get_analysis_data(uid, num):
     
     return {"pivots": {"ANA": p_main, "MIRROR": p_mirror, "EXTRA": p_extra}, "full_list": list(full_list)}
 
-async def format_analysis_msg(state, num, data, title="🎯 𝐀𝐍𝐀𝐋İ𝐙 PANELİ"):
+async def format_analysis_msg(state, num, data, title="ANALİZ PANELİ"):
     total_risk = state["last_unit"] * len(data["full_list"])
-    res = f"{title}\n━━━━━━━━━━━━━\n"
-    res += f"📍 SON: `{num}`\n\n"
-    res += f"🔥 **ANA PİVOT:** `{data['pivots']['ANA']}` (±2)\n"
-    res += f"💎 **AYNA:** `{data['pivots']['MIRROR']}` (±1)\n"
-    res += f"💎 **EXTRA:** `{data['pivots']['EXTRA']}` (±1)\n\n"
-    res += f"📊 **BAHİS:**\n"
-    res += f"🪙 Unit: `{state['last_unit']}` | 📉 Risk: `{total_risk}`\n"
-    res += f"💰 Kasa: `{state['bankroll']}`"
+    res = f"{title}\n"
+    res += f"SON: {num}\n\n"
+    res += f"ANA PİVOT: {data['pivots']['ANA']} (±2)\n"
+    res += f"AYNA: {data['pivots']['MIRROR']} (±1)\n"
+    res += f"EXTRA: {data['pivots']['EXTRA']} (±1)\n\n"
+    res += f"Unit: {state['last_unit']} | Risk: {total_risk}\n"
+    res += f"Kasa: {state['bankroll']}"
     return res
 
 # --- HANDLERS ---
@@ -68,7 +66,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0, "hit_streak": 0,
         "bankroll": 0, "waiting_bankroll": True, "watch_mode": False, "last_unit": 0
     }
-    await update.message.reply_text("🛡️ **𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v10.5**\nKasa girişi (10 sayı Sessiz Mod):")
+    await update.message.reply_text("GUARDIAN v10.6\nKasa girişini yapın:")
 
 async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -76,27 +74,22 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     state = user_states[uid]
 
-    # --- GÜVENLİK FİLTRESİ ---
-    if text == '🗑️ SIFIRLA': await start(update, context); return
-    if text == '↩️ GERİ AL':
-        if state["history"]: state["history"].pop(); await update.message.reply_text("⬅️ Geri alındı."); return
+    if text == '/start': await start(update, context); return
 
     if not text.isdigit():
-        await update.message.reply_text("⚠️ **HATA:** Lütfen sadece rakam girin!")
+        await update.message.reply_text("lütfen rakam girin")
         return
     
     val = int(text)
     
-    # Kasa girişi değilse 0-36 kontrolü yap
     if not state["waiting_bankroll"] and (val < 0 or val > 36):
-        await update.message.reply_text("⚠️ **HATA:** Rulet masasında 60 yoktur Patron! (0-36 arası girin)")
+        await update.message.reply_text("lütfen rakam girin")
         return
-    # -----------------------
 
     if state["waiting_bankroll"]:
         state["bankroll"] = val
         state["waiting_bankroll"] = False
-        await update.message.reply_text(f"💰 Kasa `{state['bankroll']}` aktif.")
+        await update.message.reply_text(f"Kasa {state['bankroll']} aktif.")
         return
 
     num = val
@@ -111,8 +104,8 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data = get_analysis_data(uid, num)
             state["last_unit"] = calculate_risk_unit(state)
             state["last_full_list"] = data["full_list"]
-            res = await format_analysis_msg(state, num, data, title="🟢 **RİTİM DÜZELDİ! ŞİMDİ GİR!**")
-            await update.message.reply_text(res, parse_mode="Markdown")
+            res = await format_analysis_msg(state, num, data, title="RİTİM DÜZELDİ! ŞİMDİ GİR!")
+            await update.message.reply_text(res)
         return 
 
     # 2. NORMAL LOSE / HIT
@@ -122,18 +115,18 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state["bankroll"] += profit
             state["hit_streak"] += 1
             state["fail_count"] = 0
-            await update.message.reply_text(f"🟢 **𝐇İ𝐓! (+{profit})**\n💰 Kasa: `{state['bankroll']}`", parse_mode="Markdown")
+            await update.message.reply_text(f"HIT! (+{profit})\nKasa: {state['bankroll']}")
         else:
             loss = (state["last_unit"] * len(state["last_full_list"]))
             state["bankroll"] -= loss
             state["hit_streak"] = 0
             state["fail_count"] += 1
-            await update.message.reply_text(f"🔴 **𝐋𝐎𝐒𝐄! (-{loss})**\n💰 Kasa: `{state['bankroll']}`", parse_mode="Markdown")
+            await update.message.reply_text(f"LOSE! (-{loss})\nKasa: {state['bankroll']}")
 
     # 3. RİTİM BOZULMA
     if state["fail_count"] >= 3:
         state["watch_mode"] = True
-        await update.message.reply_text("🚨 **RİTİM BOZULDU!**\nSessiz izleme başladı. Bölge yakalanınca analiz gelecek.")
+        await update.message.reply_text("RİTİM BOZULDU!\nSessiz izleme başladı.")
         return
 
     # 4. NORMAL AKIŞ
@@ -143,7 +136,7 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state["last_unit"] = calculate_risk_unit(state)
         state["last_full_list"] = data["full_list"]
         res = await format_analysis_msg(state, num, data)
-        await update.message.reply_text(res, parse_mode="Markdown")
+        await update.message.reply_text(res)
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
