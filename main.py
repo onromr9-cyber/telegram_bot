@@ -48,15 +48,17 @@ def get_analysis_data(uid, num):
     
     return {"pivots": {"ANA": p_main, "MIRROR": p_mirror, "EXTRA": p_extra}, "full_list": list(full_list)}
 
-async def format_analysis_msg(state, num, data, title="ANALİZ PANELİ"):
+async def format_analysis_msg(state, num, data, title="🎯 ANALİZ PANELİ"):
     total_risk = state["last_unit"] * len(data["full_list"])
-    res = f"{title}\n"
-    res += f"SON: {num}\n\n"
-    res += f"ANA PİVOT: {data['pivots']['ANA']} (±2)\n"
-    res += f"AYNA: {data['pivots']['MIRROR']} (±1)\n"
-    res += f"EXTRA: {data['pivots']['EXTRA']} (±1)\n\n"
-    res += f"Unit: {state['last_unit']} | Risk: {total_risk}\n"
-    res += f"Kasa: {state['bankroll']}"
+    # Sade görsel dokunuş: Estetik ayırıcı çizgi
+    separator = "━" * 15
+    
+    res = f"{title}\n{separator}\n"
+    res += f"📍 SON: {num}\n\n"
+    res += f"🔥 ANA PİVOT: {data['pivots']['ANA']} (±2)\n"
+    res += f"💎 AYNA: {data['pivots']['MIRROR']} (±1)\n"
+    res += f"🌀 EXTRA: {data['pivots']['EXTRA']} (±1)\n\n"
+    res += f"{separator}\n📊 Unit: {state['last_unit']} | Risk: {total_risk}\n💰 Kasa: {state['bankroll']}"
     return res
 
 # --- HANDLERS ---
@@ -66,7 +68,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0, "hit_streak": 0,
         "bankroll": 0, "waiting_bankroll": True, "watch_mode": False, "last_unit": 0
     }
-    await update.message.reply_text("GUARDIAN v10.6\nKasa girişini yapın:")
+    await update.message.reply_text("GUARDIAN v10.7\nKasa girişini yapın:")
 
 async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -89,7 +91,7 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state["waiting_bankroll"]:
         state["bankroll"] = val
         state["waiting_bankroll"] = False
-        await update.message.reply_text(f"Kasa {state['bankroll']} aktif.")
+        await update.message.reply_text(f"💰 Kasa {state['bankroll']} aktif.")
         return
 
     num = val
@@ -104,7 +106,7 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data = get_analysis_data(uid, num)
             state["last_unit"] = calculate_risk_unit(state)
             state["last_full_list"] = data["full_list"]
-            res = await format_analysis_msg(state, num, data, title="RİTİM DÜZELDİ! ŞİMDİ GİR!")
+            res = await format_analysis_msg(state, num, data, title="🟢 RİTİM DÜZELDİ! ŞİMDİ GİR!")
             await update.message.reply_text(res)
         return 
 
@@ -115,18 +117,18 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state["bankroll"] += profit
             state["hit_streak"] += 1
             state["fail_count"] = 0
-            await update.message.reply_text(f"HIT! (+{profit})\nKasa: {state['bankroll']}")
+            await update.message.reply_text(f"🟢 HIT! (+{profit})\nKasa: {state['bankroll']}")
         else:
             loss = (state["last_unit"] * len(state["last_full_list"]))
             state["bankroll"] -= loss
             state["hit_streak"] = 0
             state["fail_count"] += 1
-            await update.message.reply_text(f"LOSE! (-{loss})\nKasa: {state['bankroll']}")
+            await update.message.reply_text(f"🔴 LOSE! (-{loss})\nKasa: {state['bankroll']}")
 
     # 3. RİTİM BOZULMA
     if state["fail_count"] >= 3:
         state["watch_mode"] = True
-        await update.message.reply_text("RİTİM BOZULDU!\nSessiz izleme başladı.")
+        await update.message.reply_text("🚨 RİTİM BOZULDU!\nSessiz izleme başladı.")
         return
 
     # 4. NORMAL AKIŞ
