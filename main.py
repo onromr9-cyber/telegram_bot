@@ -24,8 +24,8 @@ MAIN_KEYBOARD = [['🗑️ SIFIRLA', '↩️ GERİ AL']]
 REPLY_MARKUP = ReplyKeyboardMarkup(MAIN_KEYBOARD, resize_keyboard=True)
 
 user_states = collections.defaultdict(lambda: {
-    "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0,
-    "bankroll": 0, "initial_bankroll": 0, "waiting_bankroll": True, "watch_mode": False
+    "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0, "hit_streak": 0,
+    "bankroll": 0, "initial_bankroll": 0, "waiting_bankroll": True, "watch_mode": False, "last_bet_amount": 0
 })
 
 def get_neighbors(num, n_range=1):
@@ -35,7 +35,15 @@ def get_neighbors(num, n_range=1):
 def get_mirror(num):
     return WHEEL[(WHEEL_MAP[num] + 18) % 37]
 
-def get_sniper_v13(num):
+def calculate_bet_per_num(state, num_count):
+    # Kasa yönetim yüzdeleri: %10'dan başlar, her hit'te artar
+    risk_ratios = [0.10, 0.12, 0.15, 0.18, 0.20]
+    idx = min(state["hit_streak"], len(risk_ratios) - 1)
+    total_bet_limit = state["bankroll"] * risk_ratios[idx]
+    unit_per_num = max(1, round(total_bet_limit / num_count))
+    return unit_per_num, risk_ratios[idx]
+
+def get_sniper_v13_2(num):
     mirror_pivot = get_mirror(num)
     m_list = set(get_neighbors(mirror_pivot, 1))
     jump_1 = WHEEL[(WHEEL_MAP[num] + 9) % 37]
@@ -45,18 +53,17 @@ def get_sniper_v13(num):
     s_list = set()
     for p in s_pivots:
         s_list.update(get_neighbors(p, 1))
-    repeat_num = {num}
-    full_list = m_list.union(j_list).union(s_list).union(repeat_num)
+    full_list = m_list.union(j_list).union(s_list).union({num})
     return {"mirror": mirror_pivot, "strategy": s_pivots, "full_list": list(full_list)}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
     user_states[uid] = {
-        "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0,
-        "bankroll": 0, "initial_bankroll": 0, "waiting_bankroll": True, "watch_mode": False
+        "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0, "hit_streak": 0,
+        "bankroll": 0, "initial_bankroll": 0, "waiting_bankroll": True, "watch_mode": False, "last_bet_amount": 0
     }
-    await update.message.reply_text("𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v13.1\nKasa girişini yapın:", reply_markup=REPLY_MARKUP)
+    await update.message.reply_text("𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v13.2\nKasa girişini yapın:", reply_markup=REPLY_MARKUP)
 
 async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -77,60 +84,67 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state["bankroll"] = val
         state["initial_bankroll"] = val
         state["waiting_bankroll"] = False
-        await update.message.reply_text(f"💰 Kasa {state['bankroll']} aktif. 10 sayı bekleniyor...")
+        await update.message.reply_text(f"💰 Kasa {state['bankroll']} aktif. İlk 10 sayı bekleniyor...")
         return
 
     num = val
-    if num < 0 or num > 36:
-        await update.message.reply_text("lütfen rakam girin")
-        return
+    if num < 0 or num > 36: return
 
-    # KASA GÜNCELLEME VE MESAJLAŞMA
+    # KAZANÇ / KAYIP HESABI
     if state["last_full_list"]:
-        investment = len(state["last_full_list"]) # Her sayıya 1 Unit basıldığı varsayımıyla
+        unit = state["last_bet_amount"]
+        total_invested = unit * len(state["last_full_list"])
         if num in state["last_full_list"]:
-            profit = 36 - investment # Kazanç (36 katı - yatırılan)
-            state["bankroll"] += profit
+            win_amount = (unit * 36) - total_invested
+            state["bankroll"] += win_amount
+            state["hit_streak"] += 1
             state["fail_count"] = 0
             if state["watch_mode"]:
                 state["watch_mode"] = False
-                await update.message.reply_text(f"🟢 RİTİM DÜZELDİ! | Rakam: {num}\n💰 GÜNCEL KASA: {state['bankroll']}")
+                await update.message.reply_text(f"🟢 RİTİM DÜZELDİ!\n💰 KASA: {state['bankroll']}")
             else:
-                await update.message.reply_text(f"🟢 HIT! (+{profit})\n💰 GÜNCEL KASA: {state['bankroll']}")
+                await update.message.reply_text(f"🟢 HIT! (+{win_amount})\n💰 KASA: {state['bankroll']}")
         else:
-            state["bankroll"] -= investment
+            state["bankroll"] -= total_invested
+            state["hit_streak"] = 0
             state["fail_count"] += 1
             if not state["watch_mode"]:
-                await update.message.reply_text(f"🔴 LOSE! (-{investment})\n💰 GÜNCEL KASA: {state['bankroll']}")
+                await update.message.reply_text(f"🔴 LOSE! (-{total_invested})\n💰 KASA: {state['bankroll']}")
 
-    # RİTİM BOZULMA KONTROLÜ
+    # RİTİM KONTROL
     if not state["watch_mode"] and state["fail_count"] >= 3:
         state["watch_mode"] = True
         state["last_full_list"] = []
-        await update.message.reply_text("⚠️ LÜTFEN KALK! ⚠️\nRitim bozuldu, izleme modu aktif.")
+        await update.message.reply_text("⚠️ LÜTFEN KALK! ⚠️\nRitim bozuldu, izleme modu.")
         return
 
     state["history"].append(num)
 
     # ANALİZ ÜRETİMİ
     if len(state["history"]) >= 10 and not state["watch_mode"]:
-        data = get_sniper_v13(num)
+        data = get_sniper_v13_2(num)
+        num_count = len(data["full_list"])
+        unit, ratio = calculate_bet_per_num(state, num_count)
+        
+        state["last_bet_amount"] = unit
         state["last_full_list"] = data["full_list"]
-        total_nums = len(data["full_list"])
+        total_investment = unit * num_count
         
         res = f"𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 🛡️\n"
         res += f"━━━━━━━━━━━━━━\n"
         res += f"📍 SON: {num}\n"
-        res += f"💸 YATIRIM: {total_nums} Unit\n" # Sadece basılacak pul sayısı
+        res += f"💸 YATIRIM: {total_investment} Birim (%{int(ratio*100)})\n"
+        res += f"🎯 PUL/RAKAM: {unit} Unit\n"
         res += f"━━━━━━━━━━━━━━\n"
         res += f"🔄 AYNA: {data['mirror']} (+1)\n"
         res += f"🛡️ SEKTÖR: {', '.join(map(str, data['strategy']))} (+1)\n"
         res += f"💎 TEKRAR: {num}\n"
         res += f"━━━━━━━━━━━━━━\n"
-        res += f"💰 GÜNCEL KASA: {state['bankroll']}"
+        res += f"💰 GÜNCEL KASA: {state['bankroll']}\n"
+        res += f"📈 HIT SERİSİ: {state['hit_streak']}"
         await update.message.reply_text(res)
     elif state["watch_mode"]:
-        data = get_sniper_v13(num)
+        data = get_sniper_v13_2(num)
         state["last_full_list"] = data["full_list"]
 
 if __name__ == '__main__':
