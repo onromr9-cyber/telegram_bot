@@ -36,24 +36,16 @@ def get_mirror(num):
     return WHEEL[(WHEEL_MAP[num] + 18) % 37]
 
 def get_sniper_v13(num):
-    # 1. AYNA + KOMŞU
     mirror_pivot = get_mirror(num)
     m_list = set(get_neighbors(mirror_pivot, 1))
-    
-    # 2. JUMP
     jump_1 = WHEEL[(WHEEL_MAP[num] + 9) % 37]
     jump_2 = WHEEL[(WHEEL_MAP[num] - 9) % 37]
     j_list = {jump_1, jump_2}
-    
-    # 3. STRATEJİ + KOMŞU (Yanında Kalma Çözümü)
     s_pivots = STRATEGY_MAP.get(num, [])
     s_list = set()
     for p in s_pivots:
         s_list.update(get_neighbors(p, 1))
-    
-    # 4. MUTLAK TEKRAR
     repeat_num = {num}
-    
     full_list = m_list.union(j_list).union(s_list).union(repeat_num)
     return {"mirror": mirror_pivot, "strategy": s_pivots, "full_list": list(full_list)}
 
@@ -64,7 +56,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0,
         "bankroll": 0, "initial_bankroll": 0, "waiting_bankroll": True, "watch_mode": False
     }
-    await update.message.reply_text("𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v13.0\nKasa girişini yapın:", reply_markup=REPLY_MARKUP)
+    await update.message.reply_text("𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v13.1\nKasa girişini yapın:", reply_markup=REPLY_MARKUP)
 
 async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -93,19 +85,23 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("lütfen rakam girin")
         return
 
-    # KAZANÇ / KAYIP KONTROLÜ
+    # KASA GÜNCELLEME VE MESAJLAŞMA
     if state["last_full_list"]:
+        investment = len(state["last_full_list"]) # Her sayıya 1 Unit basıldığı varsayımıyla
         if num in state["last_full_list"]:
+            profit = 36 - investment # Kazanç (36 katı - yatırılan)
+            state["bankroll"] += profit
             state["fail_count"] = 0
             if state["watch_mode"]:
                 state["watch_mode"] = False
-                await update.message.reply_text(f"🟢 RİTİM DÜZELDİ! | Rakam: {num}")
+                await update.message.reply_text(f"🟢 RİTİM DÜZELDİ! | Rakam: {num}\n💰 GÜNCEL KASA: {state['bankroll']}")
             else:
-                await update.message.reply_text(f"🟢 HIT! | Rakam: {num}\nKasa: {state['bankroll']}")
+                await update.message.reply_text(f"🟢 HIT! (+{profit})\n💰 GÜNCEL KASA: {state['bankroll']}")
         else:
+            state["bankroll"] -= investment
             state["fail_count"] += 1
             if not state["watch_mode"]:
-                await update.message.reply_text(f"🔴 LOSE! | Rakam: {num}\nKasa: {state['bankroll']}")
+                await update.message.reply_text(f"🔴 LOSE! (-{investment})\n💰 GÜNCEL KASA: {state['bankroll']}")
 
     # RİTİM BOZULMA KONTROLÜ
     if not state["watch_mode"] and state["fail_count"] >= 3:
@@ -120,22 +116,20 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(state["history"]) >= 10 and not state["watch_mode"]:
         data = get_sniper_v13(num)
         state["last_full_list"] = data["full_list"]
-        
         total_nums = len(data["full_list"])
+        
         res = f"𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 🛡️\n"
         res += f"━━━━━━━━━━━━━━\n"
         res += f"📍 SON: {num}\n"
-        res += f"💸 YATIRIM: {total_nums} Unit\n"
+        res += f"💸 YATIRIM: {total_nums} Unit\n" # Sadece basılacak pul sayısı
         res += f"━━━━━━━━━━━━━━\n"
         res += f"🔄 AYNA: {data['mirror']} (+1)\n"
         res += f"🛡️ SEKTÖR: {', '.join(map(str, data['strategy']))} (+1)\n"
         res += f"💎 TEKRAR: {num}\n"
         res += f"━━━━━━━━━━━━━━\n"
-        res += f"🎲 ADET: {total_nums} Rakam\n"
-        res += f"💰 KASA: {state['bankroll']}"
+        res += f"💰 GÜNCEL KASA: {state['bankroll']}"
         await update.message.reply_text(res)
     elif state["watch_mode"]:
-        # İzleme modunda arka planda analiz yap ki ritmin düzeldiğini anlasın
         data = get_sniper_v13(num)
         state["last_full_list"] = data["full_list"]
 
