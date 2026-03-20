@@ -32,6 +32,14 @@ def get_neighbors(num, n_range=1):
     idx = WHEEL_MAP[int(num)]
     return [WHEEL[(idx + i) % 37] for i in range(-n_range, n_range + 1)]
 
+def shift_if_exists(target_list, num):
+    """Eğer sayı listede varsa, saat yönünde bir sonraki boş sayıyı bulur."""
+    current_num = num
+    while current_num in target_list:
+        idx = WHEEL_MAP[current_num]
+        current_num = WHEEL[(idx + 1) % 37] # Bir sağa kaydır
+    return current_num
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
@@ -39,7 +47,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0, "hit_streak": 0,
         "bankroll": 0, "initial_bankroll": 0, "waiting_bankroll": True, "watch_mode": False, "current_unit": 0
     }
-    await update.message.reply_text("𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v13.6 (Focused Jump)\nKasa girişini yapın:", reply_markup=REPLY_MARKUP)
+    await update.message.reply_text("𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v13.7 (Anti-Overlap)\nKasa girişini yapın:", reply_markup=REPLY_MARKUP)
 
 async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -58,7 +66,7 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state["waiting_bankroll"]:
         state["bankroll"] = state["initial_bankroll"] = val
         state["waiting_bankroll"] = False
-        await update.message.reply_text(f"💰 Kasa {val} yüklendi. 10 sayı bekleniyor..."); return
+        await update.message.reply_text(f"💰 Kasa {val} aktif. İlk 10 sayı bekleniyor..."); return
 
     num = val
     if num < 0 or num > 36: return
@@ -83,61 +91,66 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not state["watch_mode"] and state["fail_count"] >= 3:
         state["watch_mode"] = True
-        await update.message.reply_text("⚠️ LÜTFEN KALK! ⚠️\nRitim bozuldu, izleme modu."); return
+        await update.message.reply_text("⚠️ LÜTFEN KALK! ⚠️\nRitim bozuldu."); return
 
     state["history"].append(num)
 
-    # ANALİZ SİSTEMİ
+    # ANTI-OVERLAP ANALİZ SİSTEMİ
     if len(state["history"]) >= 10:
         idx = WHEEL_MAP[num]
-        # 1. AYNA (+1)
+        final_list = []
+
+        # 1. AYNA (+1) - İlk öncelik
         mirror_val = WHEEL[(idx + 18) % 37]
-        mirror_group = get_neighbors(mirror_val, 1)
+        for n in get_neighbors(mirror_val, 1):
+            if n not in final_list: final_list.append(n)
 
-        # 2. SEKTÖR (Komşusuz)
+        # 2. SEKTÖR (Nokta) - Çakışırsa kaydır
         sectors = STRATEGY_MAP.get(num, [])
+        shifted_sectors = []
+        for s in sectors:
+            s_val = shift_if_exists(final_list, s)
+            final_list.append(s_val)
+            shifted_sectors.append(s_val)
 
-        # 3. FOCUSED JUMP (3 Nokta + 1 Komşu)
-        jump_points = [
-            WHEEL[(idx + 9) % 37],
-            WHEEL[(idx - 9) % 37],
-            WHEEL[(idx + 18) % 37] # Ayna noktasıyla çakışabilir (2X potansiyeli)
-        ]
-        jump_full = []
-        for jp in jump_points: jump_full.extend(get_neighbors(jp, 1))
+        # 3. JUMP (+1) - Çakışırsa kaydır
+        jump_points = [WHEEL[(idx + 9) % 37], WHEEL[(idx - 9) % 37], WHEEL[(idx + 18) % 37]]
+        shifted_jumps = []
+        for jp in jump_points:
+            for n in get_neighbors(jp, 1):
+                n_val = shift_if_exists(final_list, n)
+                final_list.append(n_val)
+                shifted_jumps.append(n_val)
 
-        # 4. TEKRAR
-        repeat = [num]
+        # 4. TEKRAR - En son kontrol
+        repeat_val = shift_if_exists(final_list, num)
+        if repeat_val not in final_list: final_list.append(repeat_val)
 
-        # Toplam Liste (Kasa hesabı için)
-        all_nums = mirror_group + sectors + jump_full + repeat
-        counts = collections.Counter(all_nums)
-        state["last_full_list"] = list(counts.keys())
+        state["last_full_list"] = final_list
         
         # Risk Yönetimi
         ratios = [0.10, 0.12, 0.15, 0.18, 0.20]
         r_idx = min(state["hit_streak"], len(ratios) - 1)
-        unit = max(1, round((state["bankroll"] * ratios[r_idx]) / len(state["last_full_list"])))
+        unit = max(1, round((state["bankroll"] * ratios[r_idx]) / len(final_list)))
         state["current_unit"] = unit
 
         if not state["watch_mode"]:
-            res = f"𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 🛡️\n"
+            res = f"𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v13.7 🛡️\n"
             res += f"━━━━━━━━━━━━━━\n"
             res += f"📍 SON: {num}\n"
-            res += f"💸 YATIRIM: {len(state['last_full_list']) * unit} (%{int(ratios[r_idx]*100)})\n"
+            res += f"💸 YATIRIM: {len(final_list) * unit} (%{int(ratios[r_idx]*100)})\n"
             res += f"🎯 BİRİM: {unit} Unit\n"
             res += f"━━━━━━━━━━━━━━\n"
             res += f"🔄 AYNA: {mirror_val} (+1)\n"
-            res += f"🛡️ SEKTÖR: {', '.join(map(str, sectors))} (Nokta)\n"
-            res += f"🚀 JUMP: {', '.join(map(str, jump_points))} (+1)\n"
-            res += f"💎 TEKRAR: {num}\n"
+            res += f"🛡️ SEKTÖR: {', '.join(map(str, shifted_sectors))}\n"
+            res += f"🚀 JUMP: {', '.join(map(str, sorted(set(shifted_jumps))))}\n"
+            res += f"💎 TEKRAR: {repeat_val}\n"
             res += f"━━━━━━━━━━━━━━\n"
             res += f"💰 GÜNCEL KASA: {state['bankroll']}\n"
             res += f"📈 SERİ: {state['hit_streak']}"
             await update.message.reply_text(res)
-        elif num in state["last_full_list"]:
-             await update.message.reply_text("🟢 RİTİM DÜZELDİ! İzleme bitti.")
-             state["watch_mode"] = False
+        elif num in final_list:
+             await update.message.reply_text("🟢 RİTİM DÜZELDİ!"); state["watch_mode"] = False
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
