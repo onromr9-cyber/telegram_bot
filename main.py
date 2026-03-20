@@ -32,9 +32,6 @@ def get_neighbors(num, n_range=1):
     idx = WHEEL_MAP[int(num)]
     return [WHEEL[(idx + i) % 37] for i in range(-n_range, n_range + 1)]
 
-def get_mirror(num):
-    return WHEEL[(WHEEL_MAP[num] + 18) % 37]
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
@@ -42,7 +39,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "history": deque(maxlen=30), "last_full_list": [], "fail_count": 0, "hit_streak": 0,
         "bankroll": 0, "initial_bankroll": 0, "waiting_bankroll": True, "watch_mode": False, "current_unit": 0
     }
-    await update.message.reply_text("𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v13.5 (Visual Update)\nKasa girişini yapın:", reply_markup=REPLY_MARKUP)
+    await update.message.reply_text("𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 v13.6 (Focused Jump)\nKasa girişini yapın:", reply_markup=REPLY_MARKUP)
 
 async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -66,10 +63,10 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     num = val
     if num < 0 or num > 36: return
 
-    # KASA HESABI (Sessizce arka planda çalışır)
+    # KASA HESABI
     if state["last_full_list"]:
         unit = state["current_unit"]
-        total_spent = len(state["last_full_list"]) * unit # Basit hesap: Her sayı 1 unit
+        total_spent = len(state["last_full_list"]) * unit
         if num in state["last_full_list"]:
             win = (unit * 36) - total_spent
             state["bankroll"] += win
@@ -92,48 +89,54 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ANALİZ SİSTEMİ
     if len(state["history"]) >= 10:
-        # Analizleri hesapla (Ancak sadece ana sayıları ekrana yazdıracağız)
-        mirror = get_mirror(num)
+        idx = WHEEL_MAP[num]
+        # 1. AYNA (+1)
+        mirror_val = WHEEL[(idx + 18) % 37]
+        mirror_group = get_neighbors(mirror_val, 1)
+
+        # 2. SEKTÖR (Komşusuz)
         sectors = STRATEGY_MAP.get(num, [])
+
+        # 3. FOCUSED JUMP (3 Nokta + 1 Komşu)
+        jump_points = [
+            WHEEL[(idx + 9) % 37],
+            WHEEL[(idx - 9) % 37],
+            WHEEL[(idx + 18) % 37] # Ayna noktasıyla çakışabilir (2X potansiyeli)
+        ]
+        jump_full = []
+        for jp in jump_points: jump_full.extend(get_neighbors(jp, 1))
+
+        # 4. TEKRAR
         repeat = [num]
 
-        # Arka planda tam listeyi koru ki kasa ve ritim takibi bozulmasın
-        all_nums = []
-        all_nums.extend(get_neighbors(mirror, 1))
-        for s in sectors: all_nums.extend(get_neighbors(s, 1))
-        all_nums.append(num)
-        all_nums.extend([WHEEL[(WHEEL_MAP[num] + 9) % 37], WHEEL[(WHEEL_MAP[num] - 9) % 37]]) # Jumps
-        
+        # Toplam Liste (Kasa hesabı için)
+        all_nums = mirror_group + sectors + jump_full + repeat
         counts = collections.Counter(all_nums)
         state["last_full_list"] = list(counts.keys())
         
-        # Risk Yönetimi (%10)
+        # Risk Yönetimi
         ratios = [0.10, 0.12, 0.15, 0.18, 0.20]
-        idx = min(state["hit_streak"], len(ratios) - 1)
-        # Basit Unit hesabı: Riske edilecek parayı, kapattığımız ceb sayısına bölüyoruz
-        unit = max(1, round((state["bankroll"] * ratios[idx]) / len(state["last_full_list"])))
+        r_idx = min(state["hit_streak"], len(ratios) - 1)
+        unit = max(1, round((state["bankroll"] * ratios[r_idx]) / len(state["last_full_list"])))
         state["current_unit"] = unit
 
         if not state["watch_mode"]:
-            # Ekran Çıktısı (Tam istediğin parçalı ve (+1) formatı)
             res = f"𝐆 𝐔 𝐀 𝐑 𝐃 𝐈 𝐀 𝐍 🛡️\n"
             res += f"━━━━━━━━━━━━━━\n"
             res += f"📍 SON: {num}\n"
-            res += f"💸 YATIRIM: {len(state['last_full_list']) * unit} (%{int(ratios[idx]*100)})\n"
+            res += f"💸 YATIRIM: {len(state['last_full_list']) * unit} (%{int(ratios[r_idx]*100)})\n"
             res += f"🎯 BİRİM: {unit} Unit\n"
             res += f"━━━━━━━━━━━━━━\n"
-            
-            # İkinci resimdeki formatı uygula
-            res += f"🔄 AYNA: {mirror} (+1)\n"
-            res += f"🛡️ SEKTÖR: {', '.join(map(str, sorted(sectors)))} (+1)\n"
-            res += f"🚀 JUMP: {all_nums[-2]}, {all_nums[-1]} (Tam)\n" # Jump'lar tekil kalabilir
+            res += f"🔄 AYNA: {mirror_val} (+1)\n"
+            res += f"🛡️ SEKTÖR: {', '.join(map(str, sectors))} (Nokta)\n"
+            res += f"🚀 JUMP: {', '.join(map(str, jump_points))} (+1)\n"
             res += f"💎 TEKRAR: {num}\n"
             res += f"━━━━━━━━━━━━━━\n"
             res += f"💰 GÜNCEL KASA: {state['bankroll']}\n"
             res += f"📈 SERİ: {state['hit_streak']}"
             await update.message.reply_text(res)
         elif num in state["last_full_list"]:
-             await update.message.reply_text("🟢 RİTİM DÜZELDİ! Şimdi bahis zamanı.")
+             await update.message.reply_text("🟢 RİTİM DÜZELDİ! İzleme bitti.")
              state["watch_mode"] = False
 
 if __name__ == '__main__':
